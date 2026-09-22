@@ -43,6 +43,7 @@ SandboxAgent（执行与交付，真实仓库沙箱）
 逐模块讨论确认后归档于 `docs/decisions/`：
 
 - [ADR-001 协作入口层：钉钉机器人 + Web 群聊](docs/decisions/001-channel-layer.md)
+- [ADR-002 三层记忆：Session、KBase 与正式知识库](docs/decisions/002-memory-layer.md)
 
 ## 状态
 
