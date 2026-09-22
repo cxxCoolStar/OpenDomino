@@ -38,6 +38,12 @@ SandboxAgent（执行与交付，真实仓库沙箱）
 4. 无人值守不等于无人负责
 5. 生产可用来自边界，而不是「全能」
 
+## 设计决策（ADR）
+
+逐模块讨论确认后归档于 `docs/decisions/`：
+
+- [ADR-001 协作入口层：钉钉机器人 + Web 群聊](docs/decisions/001-channel-layer.md)
+
 ## 状态
 
 🚧 项目初始化阶段，开发中。
