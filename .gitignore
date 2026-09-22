@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 虚拟环境与环境变量
+.env
+.env.local
+.env.*.local
+
+# 依赖
+node_modules/
+
+# 构建产物
+frontend/dist/
+*.local
+
+# 沙箱工作区与数据
+workspaces/
+data/
+*.db
+*.sqlite3
+chroma_db/
+
+# 日志
+*.log
+logs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 密钥
+*.pem
+*.key
+secrets/
