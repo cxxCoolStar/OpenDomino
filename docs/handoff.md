@@ -1,7 +1,7 @@
 # OpenDomino 开发交接
 
-> 更新日期：2026-09-23
-> 当前阶段：基础问答闭环已实现；真实钉钉 Stream 已连接；真实 LLM 请求被上游 429 限流阻塞。
+> 更新日期：2026-09-23（第二次更新）
+> 当前阶段：**真实钉钉 → LLM → 钉钉回复闭环已验证通过**；ADR-002 Phase 0（记忆确认流 + 上下文装配重构 + 并发修复）已实现并上线；下一步 Phase A（LLM 提炼 + 滚动摘要）。
 
 ## 项目目标
 
@@ -22,18 +22,18 @@ OpenDomino 复刻「从钉群提问到任务交付」的团队级 Agent 基础�
 
 ## 验证状态
 
-- 最近测试：`cd backend && python -m pytest tests/ -q`，**37 passed**。
-- Python 编译检查通过，FastAPI 可导入，健康路由注册。
-- 钉钉凭证可创建 Stream 客户端，`open_connection()` 握手成功；Uvicorn 日志出现钉钉 endpoint，`/health` 返回 `{"status":"ok"}`，`/ready` 返回 `{"status":"ready","channel":"dingtalk-stream"}`。
-- 真实 LLM 探测未通过：上游先返回 Cloudflare 502，之后返回 HTTP 429，提示所有可用账号当前都被限流。完整的「钉钉群消息 → LLM → 钉钉回复」尚未验证成功。
-- 本地 Uvicorn 服务在最近一次验证后仍运行于 `http://127.0.0.1:8000`。启动日志位于当前会话工具输出，不作为项目交接依赖；需要时先检查端口/进程再启动第二份实例。
+- 最近测试：`cd backend && python -m pytest tests/ -q`，**63 passed**（含确认流 12 个、装配/并发 9 个新测试）。
+- **真实闭环已验证**（2026-09-23）：在真实钉钉群 @机器人 提问，ConsoleAgent 调用配置 LLM 并以 answer 动作正确回复，SQLite 已落库 user/assistant 消息（chat `cidYK5nEw+...`，见 `data/opendomino.db`）。
+- LLM 上游 429 已解除（探测成功）。
+- 服务运行于 `http://127.0.0.1:8000`，Stream 握手成功。
+- `init()` 已加轻量列迁移（`pending_memory_json`、`summary`），旧库自动升级，`create_all` 不会给已有表加列的问题已处理。
 
 ## 已确认的设计决策
 
 完整背景见 `docs/decisions/`：
 
 - ADR-001：仅钉钉群聊作为入口；不做私聊和 Web 群聊。Web 后期只作为管理后台。
-- ADR-002：L1 群级 Session、L2 团队 KBase、L3 正式知识库分层；团队记忆写入需要确认。
+- ADR-002：L1 群级 Session、L2 团队 KBase、L3 正式知识库分层；团队记忆写入需要确认。**Phase 0 增补（已实现）**：双槽位 pending/pending_memory；确认流 `/沉淀` 建草稿群内确认、`记住:` 直达入库；确认词确定性拦截（@ 门控，不走 LLM）；拒绝/过期物理删除；上下文装配段落模型 + 预算反向填充；压缩设计（Phase A 实施）；并发模型。
 - ADR-003：ConsoleAgent 单次结构化路由；pending 判定和路由合并；群关联仓库；Task 持久化后异步执行。
 - ADR-004：SandboxAgent 使用受控 Agentic 循环；容器按仓库池化，任务工作区独占并重置；强制汇总、反死循环和安全护栏；TaskEvent 给团队看、Langfuse trace 给开发者排查。
 - ADR-005：SKILL 由模型自主选择加载；系统提示只放技能目录，按需加载全文并预检依赖。
@@ -42,27 +42,18 @@ OpenDomino 复刻「从钉群提问到任务交付」的团队级 Agent 基础�
 
 ## 下一步开发顺序
 
-### 1. 先完成真实钉钉 + LLM 闭环验证
+### 1. Phase A：LLM 提炼 + 滚动摘要（当前最高优先级）
 
-这是当前最高优先级，不要先扩展沙箱。LLM 服务解除限流后，在已授权钉钉群 @机器人发一条无敏感内容的测试问题，确认：
+LLM 已可用，Phase 0 的状态机和 `summary` 字段已就位，可直接开工：
 
-1. Stream 收到并 ACK 消息；
-2. 群聊/@/白名单门控正确；
-3. ConsoleAgent 调用配置模型并解析结构化决策；
-4. 回复使用触发消息对应的 `session_webhook`；
-5. SQLite 保存 user/assistant 消息；
-6. 重启后群 Session 能恢复。
+- **纠正提炼**：路由器 `correction_detected=true` 时，把纠正内容建草稿进入确认流（复用 `MemoryConfirmHandler`，汇入同一状态机）。
+- **滚动摘要**：`messages` 超过 `session_compact_trigger`（40）时触发压缩；Stage 1 免费过滤机械回复；Stage 2 用 `console_summary_model`（默认 = console_model）按 ADR-002 模板（当前主题/已解决问答+来源标记/关键决定/用户纠正原话/未决问题）迭代更新 `session.summary`；LLM 失败降级为丢弃 + "[更早 N 条消息已省略]"占位。
+- **路由器 prompt 补澄清归属**：pending 带 `asked_user_id` 后，prompt 中加"旁人插话时倾向 new_question、不消费别人的澄清"指引。
+- 详细设计已定稿于 `docs/decisions/002-memory-layer.md`（Phase 0 增补节）。
 
-如果持续 429，检查 LLM 服务提供方的限流/账户配额与模型配置；不要把该问题误判成钉钉或本地 SDK 故障。真实消息测试前避免在共享群发送敏感信息。
+### 2. 修复 ConsoleAgent 的剩余正确性缺口
 
-### 2. 修复 ConsoleAgent 的已知正确性缺口
-
-真实闭环前后都应优先处理：
-
-- **回复 webhook 竞态**：`DingTalkChannel._fresh_webhook()` 优先取按 chat_id 缓存值，再取当前消息 fallback；同群并发时可能用到另一条消息 webhook。应改成当前消息 webhook 优先，缓存仅作必要 fallback，或完全移除缓存路径。
-- **Session 并发安全**：同群锁仅在单个 ConsoleAgent 进程内有效；多 worker 部署会有跨进程竞争。第一阶段可明确单 worker 约束，未来再做数据库级并发控制。
-- **pending 超时未接入**：`ConsoleAgent._expire_pending()` 已写但 pipeline 尚未调用；需在路由前检查并持久化清理。
-- **pending_resolution 边界**：new_question/cancel/answered 的状态转移需测试，确认新话题不会意外消费或保留错误 pending。
+- **Session 并发安全**：同群锁仅在单个 ConsoleAgent 进程内有效；第一阶段维持单 worker 约束，未来做数据库级并发控制。
 - **群仓库绑定**：目前只是进程内字典，未持久化，也没有管理入口；委派前还不能依赖它作为可靠 repo 来源。
 - **解析降级行为**：无效 JSON 两次后把模型原始文本直接答给用户，可能缺少来源标记；需要决定安全的降级话术并补测试。
 

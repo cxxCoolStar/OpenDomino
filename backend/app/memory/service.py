@@ -95,6 +95,15 @@ class SQLiteMemoryService:
     async def init(self) -> None:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # create_all 不给已有表加列；轻量迁移补齐 Phase 0 新增列
+            for ddl in (
+                "ALTER TABLE sessions ADD COLUMN pending_memory_json Text DEFAULT ''",
+                "ALTER TABLE sessions ADD COLUMN summary Text DEFAULT ''",
+            ):
+                try:
+                    await conn.exec_driver_sql(ddl)
+                except Exception:  # 列已存在
+                    pass
 
     # ---- L1 ----
 
