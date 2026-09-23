@@ -35,7 +35,7 @@ OpenDomino 复刻「从钉群提问到任务交付」的团队级 Agent 基础�
 - ADR-001：仅钉钉群聊作为入口；不做私聊和 Web 群聊。Web 后期只作为管理后台。
 - ADR-002：L1 群级 Session、L2 团队 KBase、L3 正式知识库分层；团队记忆写入需要确认。**Phase 0 增补（已实现）**：双槽位 pending/pending_memory；确认流 `/沉淀` 建草稿群内确认、`记住:` 直达入库；确认词确定性拦截（@ 门控，不走 LLM）；拒绝/过期物理删除；上下文装配段落模型 + 预算反向填充；压缩设计（Phase A 实施）；并发模型。
 - ADR-003：ConsoleAgent 单次结构化路由；pending 判定和路由合并；群关联仓库；Task 持久化后异步执行。
-- ADR-004：SandboxAgent 使用受控 Agentic 循环；容器按仓库池化，任务工作区独占并重置；强制汇总、反死循环和安全护栏；TaskEvent 给团队看、Langfuse trace 给开发者排查。
+- ADR-004：SandboxAgent 使用受控 Agentic 循环；容器按仓库池化，任务工作区独占并重置；强制汇总、反死循环和安全护栏；TaskEvent 给团队看、Langfuse trace 给开发者排查。**详细设计已定稿（2026-09-23，见 `docs/design/sandbox-agent-detail.md`，未实现）**：原生 function calling 循环 + 8k 截断/确定性历史裁剪（LLM 摘要留二期）；TaskService 落库+入队即返回，重启时 pending 续跑、running 标 failed；容器按 repo 池化复用、**容器内 clone**（规避 Windows bind-mount I/O）；fastclaw 三层超时击杀（setsid+pgid+二次 exec kill）；回传走钉钉主动发消息 API + webhook 兜底 + TaskEvent 永远落库（session_webhook 5 分钟过期问题）；凭据 HTTPS+PAT+输出脱敏；工具集复用 ToolRegistry 全局单例、容器经 dispatch ctx 注入。
 - ADR-005：SKILL 由模型自主选择加载；系统提示只放技能目录，按需加载全文并预检依赖。
 - ADR-006：工具参考 hermes-agent，普通 Python handler + schema 注册到统一 ToolRegistry；ConsoleAgent 当前无工具循环。
 - ADR-007：采用 Langfuse，trace_id 随 Task 传递并跨异步执行续接；TaskEvent 与 trace 各司其职。

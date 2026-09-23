@@ -5,6 +5,10 @@
 > 前置依赖：ADR-001 协作入口层、ADR-002 三层记忆、ADR-003 ConsoleAgent
 > 关联：ADR-005 SKILL 方法层、ADR-006 工具层、ADR-007 链路追踪
 > 调研参考：fastclaw（`internal/sandbox`、`internal/agent/loop.go`）
+>
+> 实现级详细设计见 [docs/design/sandbox-agent-detail.md](../design/sandbox-agent-detail.md)
+> （逐点讨论定案：function calling 循环、TaskService 恢复策略、容器内 clone、
+> 主动 API 回传、HTTPS+PAT+脱敏、ToolRegistry 单例 + ctx 注入容器）。
 
 ## 背景
 
