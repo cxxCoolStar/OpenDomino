@@ -44,6 +44,11 @@ SandboxAgent（执行与交付，真实仓库沙箱）
 
 - [ADR-001 协作入口层：钉钉机器人 + Web 群聊](docs/decisions/001-channel-layer.md)
 - [ADR-002 三层记忆：Session、KBase 与正式知识库](docs/decisions/002-memory-layer.md)
+- [ADR-003 ConsoleAgent：理解与路由](docs/decisions/003-console-agent.md)
+- [ADR-004 SandboxAgent：执行与交付](docs/decisions/004-sandbox-agent.md)
+- [ADR-005 SKILL 方法层](docs/decisions/005-skill-layer.md)
+- [ADR-006 工具层：Tool Registry](docs/decisions/006-tool-layer.md)
+- [ADR-007 链路追踪：Langfuse](docs/decisions/007-tracing.md)
 
 ## 状态
 
