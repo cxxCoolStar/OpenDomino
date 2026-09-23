@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     console_model: str = "gpt-4o-mini"
     sandbox_model: str = "gpt-4o"
+    sandbox_llm_timeout_seconds: int = 120  # 执行循环单次 LLM 调用硬超时（编码任务输出长，比 console 宽）
 
     # ---- ADR-001 入口层（钉钉）----
     dingtalk_client_id: str = ""
@@ -23,6 +24,8 @@ class Settings(BaseSettings):
     dingtalk_allowed_users: str = "*"      # * = 所有人，否则逗号分隔 user_id
     dingtalk_free_response_chats: str = ""  # 免 @ 即可响应的群，逗号分隔
     dingtalk_allowed_chats: str = ""        # 群白名单（硬门控），逗号分隔
+    dingtalk_robot_code: str = ""           # 机器人主动发消息用；留空则取 dingtalk_client_id
+    dingtalk_robot_messages_enabled: bool = True  # 任务回传主通道开关；关闭则仅 session_webhook
 
     # ---- ADR-003 ConsoleAgent ----
     console_context_window: int = 20
@@ -57,6 +60,12 @@ class Settings(BaseSettings):
     sandbox_verify_max_retries: int = 2
     sandbox_container_idle_ttl_min: int = 10
     sandbox_loop_same_call_limit: int = 3
+    sandbox_tool_output_max_chars: int = 8000   # 单次工具输出截断（ADR-004 表）
+    sandbox_history_trim_chars: int = 60000     # 执行循环历史裁剪阈值
+    sandbox_history_keep_recent: int = 6        # 裁剪时保留最近 N 步工具结果
+    sandbox_cpus: float = 2.0
+    sandbox_mem_limit: str = "2g"
+    sandbox_sweep_interval_seconds: int = 30
 
     # ---- ADR-005 SKILL ----
     skills_dir: str = "skills"
