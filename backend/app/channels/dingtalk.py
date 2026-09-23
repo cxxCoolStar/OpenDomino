@@ -106,6 +106,7 @@ class DingTalkChannel(ChannelAdapter):
             chat_name=msg.chat_name,
             is_group=msg.is_group,
             message_id=msg.message_id,
+            is_at_bot=msg.is_at_bot,
             session_webhook=msg.session_webhook,
             raw=msg.raw,
         )

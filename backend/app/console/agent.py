@@ -1,4 +1,4 @@
-"""ConsoleAgent 主管线（ADR-003）：会话恢复→装配→路由→动作→持久化，群级串行锁。"""
+"""ConsoleAgent 主管线（ADR-003）：会话恢复→状态检查→确认流拦截→装配→路由→动作→持久化，群级串行锁。"""
 from __future__ import annotations
 
 import asyncio
@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 from app.channels.base import UnifiedMessage
 from app.config import settings
 from app.console.context import ContextAssembler
+from app.console.memory_confirm import MemoryConfirmHandler
 from app.console.router import Router
 from app.console.router_types import Action, PendingResolution
 from app.memory.types import ChatMessage, MemoryService, PendingState
@@ -32,6 +33,7 @@ class ConsoleAgent:
         self._reply = reply
         self._delegate = delegate
         self._assembler = ContextAssembler(memory)
+        self._confirm = MemoryConfirmHandler(memory)
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _lock(self, chat_id: str) -> asyncio.Lock:
@@ -40,7 +42,11 @@ class ConsoleAgent:
         return self._locks[chat_id]
 
     async def handle(self, msg: UnifiedMessage) -> None:
-        async with self._lock(msg.chat_id):
+        lock = self._lock(msg.chat_id)
+        if lock.locked():
+            # 排队反馈：webhook 仅 5 分钟有效，先确认收到，正式回答走完整管线
+            await self._reply(msg.chat_id, "收到，正在处理前面的消息，请稍候。", msg.session_webhook)
+        async with lock:
             try:
                 await self._pipeline(msg)
             except Exception:  # noqa: BLE001
@@ -50,6 +56,12 @@ class ConsoleAgent:
     async def _pipeline(self, msg: UnifiedMessage) -> None:
         session = await self._memory.load_session(msg.chat_id)
         self._expire_pending(session)
+
+        # 记忆确认流拦截（确定性，@ 门控；消费后不走路由器）
+        if await self._confirm.try_handle(msg, session, self._reply):
+            session.last_route = {"action": "memory_confirm", "ts": time.time()}
+            await self._memory.save_session(session)
+            return
 
         # 追加用户消息
         session.messages.append(
@@ -71,7 +83,12 @@ class ConsoleAgent:
             reply_text = decision.answer
         elif decision.action == Action.CLARIFY:
             session.pending = PendingState(
-                kind="clarify", payload={"question": decision.clarify_question}
+                kind="clarify",
+                payload={
+                    "question": decision.clarify_question,
+                    "asked_user_id": msg.user_id,       # 多人场景：澄清归属（并发修复 3）
+                    "asked_user_name": msg.user_name,
+                },
             )
             reply_text = decision.clarify_question
         elif decision.action == Action.DELEGATE:
@@ -111,10 +128,11 @@ class ConsoleAgent:
         session.active_task_ids.append(task_id)
         return f"已受理，任务 #{task_id[:8]}：{draft['title']}。完成后我会在群里同步。"
 
-    # 待澄清超时被动清理（下一条消息到达时调用）
+    # 待处理状态超时被动清理（下一条消息到达时调用）
     @staticmethod
     def _expire_pending(session) -> None:
+        ttl = settings.console_clarify_ttl_minutes * 60
         if session.pending and session.pending.kind == "clarify":
-            ttl = settings.console_clarify_ttl_minutes * 60
             if time.time() - session.pending.created_at > ttl:
                 session.pending = None
+        # pending_memory 的 TTL 由确认流拦截器在匹配时惰性检查

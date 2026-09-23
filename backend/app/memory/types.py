@@ -40,7 +40,9 @@ class SessionContext:
     chat_id: str
     conversation_id: str = ""
     messages: list[ChatMessage] = field(default_factory=list)
-    pending: PendingState | None = None
+    pending: PendingState | None = None           # 澄清等待（对话阻塞态）
+    pending_memory: PendingState | None = None    # 待确认记忆（非阻塞提议，ADR-002）
+    summary: str = ""                             # 已压缩对话的滚动摘要（Phase A 生成）
     active_task_ids: list[str] = field(default_factory=list)
     last_route: dict[str, Any] = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
@@ -111,6 +113,7 @@ class MemoryService(Protocol):
     async def create_memory_draft(self, draft: MemoryDraft) -> str: ...
     async def confirm_memory(self, memory_id: str, actor_id: str) -> None: ...
     async def get_memory(self, memory_id: str) -> MemoryHit | None: ...
+    async def delete_memory(self, memory_id: str) -> bool: ...
 
     # L3
     async def search_knowledge(self, query: str, *, limit: int = 8) -> list[KnowledgeHit]: ...

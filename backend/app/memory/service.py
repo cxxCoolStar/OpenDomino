@@ -37,6 +37,8 @@ class SessionRow(Base):
     conversation_id: Mapped[str] = mapped_column(String(128), default="")
     messages_json: Mapped[str] = mapped_column(Text, default="[]")
     pending_json: Mapped[str] = mapped_column(Text, default="")
+    pending_memory_json: Mapped[str] = mapped_column(Text, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
     active_task_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     last_route_json: Mapped[str] = mapped_column(Text, default="{}")
     updated_at: Mapped[float] = mapped_column(Float, default=0.0)
@@ -62,12 +64,17 @@ class MemoryRow(Base):
 def _session_from_row(row: SessionRow) -> SessionContext:
     msgs = [ChatMessage(**m) for m in json.loads(row.messages_json or "[]")]
     pending = PendingState(**json.loads(row.pending_json)) if row.pending_json else None
+    pending_memory = (
+        PendingState(**json.loads(row.pending_memory_json)) if row.pending_memory_json else None
+    )
     return SessionContext(
         session_id=row.session_id,
         chat_id=row.chat_id,
         conversation_id=row.conversation_id,
         messages=msgs,
         pending=pending,
+        pending_memory=pending_memory,
+        summary=row.summary or "",
         active_task_ids=json.loads(row.active_task_ids_json or "[]"),
         last_route=json.loads(row.last_route_json or "{}"),
         updated_at=row.updated_at,
@@ -111,6 +118,11 @@ class SQLiteMemoryService:
                 [vars(m) for m in session.messages], ensure_ascii=False
             )
             row.pending_json = json.dumps(vars(session.pending), ensure_ascii=False) if session.pending else ""
+            row.pending_memory_json = (
+                json.dumps(vars(session.pending_memory), ensure_ascii=False)
+                if session.pending_memory else ""
+            )
+            row.summary = session.summary
             row.active_task_ids_json = json.dumps(session.active_task_ids, ensure_ascii=False)
             row.last_route_json = json.dumps(session.last_route, ensure_ascii=False)
             row.updated_at = session.updated_at
@@ -180,6 +192,16 @@ class SQLiteMemoryService:
                 memory_type=r.memory_type, rationale=r.rationale,
                 status=MemoryStatus(r.status),
             )
+
+    async def delete_memory(self, memory_id: str) -> bool:
+        """条目级 remove（ADR-002 写入治理）。拒绝/过期的 pending 草稿物理删除。"""
+        async with self._session() as s:
+            row = await s.get(MemoryRow, memory_id)
+            if row is None:
+                return False
+            await s.delete(row)
+            await s.commit()
+            return True
 
     # ---- L3 ----
 

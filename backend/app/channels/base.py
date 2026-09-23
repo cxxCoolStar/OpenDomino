@@ -21,6 +21,7 @@ class UnifiedMessage:
     user_name: str = ""
     chat_name: str = ""
     is_group: bool = True
+    is_at_bot: bool = False           # 是否 @ 了机器人（记忆操作的门控条件）
     session_webhook: str = ""          # 钉钉回消息用的临时 webhook（5 分钟过期）
     timestamp: float = field(default_factory=time.time)
     raw: dict[str, Any] = field(default_factory=dict)   # 原始报文，调试用

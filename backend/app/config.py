@@ -30,11 +30,17 @@ class Settings(BaseSettings):
     console_knowledge_limit: int = 8
     console_max_context_chars: int = 12000
     console_clarify_ttl_minutes: int = 30
+    console_llm_timeout_seconds: int = 60   # 单次 LLM 调用硬超时，防止群队列冻结
     repo_registry: str = ""                 # name=url|desc;name2=url2|desc2
 
     # ---- ADR-002 记忆层 ----
     memory_db_url: str = "sqlite+aiosqlite:///./data/opendomino.db"
     chroma_persist_dir: str = "./data/chroma"
+    memory_confirm_ttl_minutes: int = 60    # 待确认记忆 TTL（非阻塞提议，比澄清宽）
+    memory_confirm_keywords: str = "确认,确定,同意,保存"
+    memory_cancel_keywords: str = "取消,不用,不要,算了,放弃,不保存"
+    session_compact_trigger: int = 40       # 消息数达到此值触发压缩（窗口的 2 倍）
+    session_summary_max_chars: int = 1500
 
     # ---- ADR-004 SandboxAgent ----
     sandbox_docker_image: str = "python:3.12-slim"
