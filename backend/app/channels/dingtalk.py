@@ -9,6 +9,7 @@ SDK 导入延迟到 start()，便于无 SDK 环境下导入本模块做测试。
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections import OrderedDict
@@ -129,6 +130,17 @@ class DingTalkChannel(ChannelAdapter):
         return ""
 
     async def reply(self, chat_id: str, text: str, *, session_webhook: str = "") -> SendResult:
+        """回复群消息。
+
+        主通道：钉钉机器人主动发消息 API（无过期，适配任务回传——session_webhook
+        5 分钟过期而任务要跑几十分钟）。API 失败时退回 session_webhook（来自
+        缓存或调用方传入），再失败返回错误由上层落 TaskEvent 兜底。
+        """
+        if settings.dingtalk_robot_messages_enabled:
+            r = await self._send_via_robot(chat_id, text)
+            if r.ok:
+                return r
+            log.warning("robot send failed, falling back to webhook: %s", r.error)
         webhook = self._fresh_webhook(chat_id, fallback=session_webhook)
         if not webhook:
             return SendResult(ok=False, error=f"no fresh session_webhook for chat {chat_id}")
@@ -142,6 +154,49 @@ class DingTalkChannel(ChannelAdapter):
             if resp.status_code == 200 and body.get("errcode", 0) == 0:
                 return SendResult(ok=True)
             return SendResult(ok=False, error=f"http {resp.status_code}: {body or resp.text[:200]}")
+        except Exception as e:  # noqa: BLE001
+            return SendResult(ok=False, error=f"{type(e).__name__}: {e}")
+
+    # ---- 机器人主动发消息 API（ADR-004 回传主通道）----
+
+    _token_cache: tuple[str, float] | None = None   # (access_token, expire_at)
+
+    async def _access_token(self) -> str:
+        cached = DingTalkChannel._token_cache
+        if cached and cached[1] > time.time() + 60:
+            return cached[0]
+        resp = await self._http.post(
+            "https://api.dingtalk.com/v1.0/oauth2/accessToken",
+            json={"appKey": settings.dingtalk_client_id, "appSecret": settings.dingtalk_client_secret},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        token, expire = data["accessToken"], int(data.get("expireIn", 7200))
+        DingTalkChannel._token_cache = (token, time.time() + expire)
+        return token
+
+    async def _send_via_robot(self, chat_id: str, text: str) -> SendResult:
+        robot_code = settings.dingtalk_robot_code or settings.dingtalk_client_id
+        if not robot_code:
+            return SendResult(ok=False, error="dingtalk_robot_code/client_id not configured")
+        try:
+            token = await self._access_token()
+            resp = await self._http.post(
+                "https://api.dingtalk.com/v1.0/robot/groupMessages/send",
+                headers={"x-acs-dingtalk-access-token": token},
+                json={
+                    "robotCode": robot_code,
+                    "openConversationId": chat_id,
+                    "msgKey": "sampleMarkdown",
+                    "msgParam": json.dumps(
+                        {"title": text[:20] or "Domino", "text": text}, ensure_ascii=False
+                    ),
+                },
+            )
+            body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            if resp.status_code < 300 and not body.get("code"):
+                return SendResult(ok=True)
+            return SendResult(ok=False, error=f"robot api {resp.status_code}: {body or resp.text[:200]}")
         except Exception as e:  # noqa: BLE001
             return SendResult(ok=False, error=f"{type(e).__name__}: {e}")
 
