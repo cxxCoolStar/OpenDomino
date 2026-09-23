@@ -1,0 +1,290 @@
+"""L3 知识库：文档导入与检索（ADR-002）。
+
+- 文档表 docs（版本 + 内容哈希）与块表 doc_chunks（heading_path + FTS5）
+- 向量进 Chroma collection "l3_chunks"（与 kbase_memories 隔离）
+- 检索双路并行：FTS5(BM25) + 向量，归一化合并去重
+- 导入幂等：内容哈希未变化直接跳过（不重复 embedding）
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import math
+import time
+import uuid
+from pathlib import Path
+from sqlalchemy import Float, Integer, String, Text, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from app.config import settings
+from app.docs.chunker import Chunk, chunk_markdown, collect_warnings
+from app.memory.embedding import EmbeddingClient, NullEmbeddingClient
+from app.memory.types import KnowledgeHit
+
+log = logging.getLogger(__name__)
+
+
+class DocBase(DeclarativeBase):
+    pass
+
+
+class DocRow(DocBase):
+    __tablename__ = "docs"
+
+    doc_id: Mapped[str] = mapped_column(String(256), primary_key=True)  # 相对路径
+    title: Mapped[str] = mapped_column(String(512), default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    source_path: Mapped[str] = mapped_column(String(1024), default="")
+    created_at: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class ChunkRow(DocBase):
+    __tablename__ = "doc_chunks"
+
+    chunk_id: Mapped[str] = mapped_column(String(320), primary_key=True)  # f"{doc_id}#{seq}"
+    doc_id: Mapped[str] = mapped_column(String(256), default="")
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    heading_path: Mapped[str] = mapped_column(String(1024), default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class KnowledgeBase:
+    """L3 知识库服务。可独立引擎，也可复用 MemoryService 的引擎（传 db_url 一致即同库）。"""
+
+    def __init__(self, db_url: str | None = None, embedding: EmbeddingClient | None = None) -> None:
+        resolved = db_url or settings.memory_db_url
+        self._engine = create_async_engine(resolved, echo=False)
+        self._session = async_sessionmaker(self._engine, class_=AsyncSession, expire_on_commit=False)
+        self._embed = embedding if embedding is not None else _shared_embedding_client()
+        self._chroma_col = None
+
+    async def init(self) -> None:
+        async with self._engine.begin() as conn:
+            await conn.run_sync(DocBase.metadata.create_all)
+            await conn.exec_driver_sql(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS doc_chunks_fts USING fts5("
+                "chunk_id UNINDEXED, heading_path, content)"
+            )
+        await self._init_chroma()
+
+    async def _init_chroma(self) -> None:
+        if isinstance(self._embed, NullEmbeddingClient):
+            return
+        try:
+            import chromadb
+            from chromadb.config import Settings as ChromaSettings
+
+            persist = Path(settings.chroma_persist_dir)
+            persist.mkdir(parents=True, exist_ok=True)
+            client = chromadb.PersistentClient(
+                path=str(persist), settings=ChromaSettings(anonymized_telemetry=False)
+            )
+            self._chroma_col = client.get_or_create_collection(
+                "l3_chunks", metadata={"hnsw:space": "cosine"}
+            )
+            log.info("L3 chroma ready: vectors=%d", self._chroma_col.count())
+        except Exception:  # noqa: BLE001
+            log.exception("L3 chroma init failed, vector leg disabled")
+            self._chroma_col = None
+
+    # ---- 导入 ----
+
+    async def import_document(self, path: Path, root: Path | None = None) -> dict:
+        """导入单篇 Markdown。哈希未变跳过；变化则失效旧块重建。返回统计。"""
+        text = path.read_text(encoding="utf-8")
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        doc_id = str(path.relative_to(root).as_posix()) if root else path.name
+        title = _extract_title(text)
+
+        async with self._session() as s:
+            row = await s.get(DocRow, doc_id)
+            if row is not None and row.content_hash == content_hash:
+                # 内容未变也可能缺向量（首轮索引失败/未启用 embedding），补齐后再跳过
+                await self._ensure_vectors(row, text)
+                return {"doc": doc_id, "action": "skipped", "chunks": 0, "warnings": []}
+            if row is None:
+                row = DocRow(doc_id=doc_id, title=title, content_hash=content_hash,
+                             source_path=str(path), created_at=time.time())
+                s.add(row)
+                action = "created"
+            else:
+                row.version += 1
+                row.title = title
+                row.content_hash = content_hash
+                action = "updated"
+            row.updated_at = time.time()
+            version = row.version
+
+            # 旧块失效（FTS 行与 chunk 行）
+            old = (await s.execute(select(ChunkRow).where(ChunkRow.doc_id == doc_id))).scalars().all()
+            old_fts_ids = [c.chunk_id for c in old]
+            for c in old:
+                await s.delete(c)
+            for cid in old_fts_ids:
+                await s.execute(
+                    sa_text("DELETE FROM doc_chunks_fts WHERE chunk_id = :cid"),
+                    {"cid": cid},
+                )
+
+            chunks = chunk_markdown(text)
+            for seq, ch in enumerate(chunks):
+                cr = ChunkRow(
+                    chunk_id=f"{doc_id}#{seq}", doc_id=doc_id, seq=seq,
+                    heading_path=ch.heading_path, content=ch.content,
+                    position=ch.start_offset, version=version,
+                )
+                s.add(cr)
+                await s.execute(
+                    sa_text("INSERT INTO doc_chunks_fts (chunk_id, heading_path, content) VALUES (:cid, :hp, :ct)"),
+                    {"cid": cr.chunk_id, "hp": ch.heading_path, "ct": ch.content},
+                )
+            await s.commit()
+
+        if self._chroma_col is not None:
+            await self._index_vectors(doc_id, chunks, version, old_fts_ids)
+        return {
+            "doc": doc_id, "action": action, "chunks": len(chunks),
+            "warnings": collect_warnings(chunks),
+        }
+
+    async def _index_vectors(self, doc_id: str, chunks: list[Chunk], version: int, old_chunk_ids: list[str]) -> None:
+        if old_chunk_ids:
+            try:
+                self._chroma_col.delete(ids=[i for i in old_chunk_ids])
+            except Exception:  # noqa: BLE001
+                log.warning("chroma delete old chunks failed for %s", doc_id)
+        if not chunks:
+            return
+        try:
+            vecs = await self._embed.embed([c.content for c in chunks])
+            if not vecs:
+                return
+            self._chroma_col.upsert(
+                ids=[f"{doc_id}#{i}" for i in range(len(chunks))],
+                embeddings=vecs,
+                documents=[c.content for c in chunks],
+                metadatas=[{"doc_id": doc_id, "seq": i, "version": version,
+                            "heading_path": c.heading_path} for i, c in enumerate(chunks)],
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("L3 vector index failed for %s (fts leg still works)", doc_id)
+
+    async def _ensure_vectors(self, row: DocRow, text: str) -> None:
+        """哈希命中但向量缺失（首轮失败）时补索引。幂等。"""
+        if self._chroma_col is None:
+            return
+        expected = self._chroma_col.get(where={"doc_id": row.doc_id})
+        if expected["ids"]:
+            return  # 向量已在
+        chunks = chunk_markdown(text)
+        await self._index_vectors(row.doc_id, chunks, row.version, [])
+        log.info("backfilled vectors for %s: %d chunks", row.doc_id, len(chunks))
+
+    # ---- 检索 ----
+
+    async def search(self, query: str, *, limit: int = 8) -> list[KnowledgeHit]:
+        """双路并行：FTS5 BM25 + 向量。归一化合并，两路都命中标 both 排前。"""
+        if not (query or "").strip():
+            return []
+        fts_hits, vec_hits = await asyncio.gather(self._search_fts(query, 10), self._search_vector(query, 10))
+
+        merged: dict[str, tuple[float, KnowledgeHit, set[str]]] = {}
+        for hits in (fts_hits, vec_hits):
+            for hit in hits:
+                key = f"{hit.source}|{hit.heading_path}|{hit.content[:50]}"
+                if key not in merged:
+                    merged[key] = (hit.score, hit, {hit.source})
+                else:
+                    score, k, legs = merged[key]
+                    legs.add(hit.source)
+                    merged[key] = (max(score, hit.score), k, legs)
+
+        # 两路都命中 → 加成后置前（强信号）
+        results: list[KnowledgeHit] = []
+        for score, k, legs in merged.values():
+            if len(legs) > 1:
+                k.score = min(1.0, score + 0.15)
+                k.source = "both"
+            results.append(k)
+        results.sort(key=lambda k: -k.score)
+        return results[:limit]
+
+    async def _search_fts(self, query: str, limit: int) -> list[KnowledgeHit]:
+        async with self._session() as s:
+            # FTS5 默认 unicode61 分词对中文按字切，短语查询用 OR 连接各 token
+            tokens = [t for t in re.split(r"\s+", query.strip()) if t]
+            match = " OR ".join(f'"{t}"' for t in tokens) or '""'
+            try:
+                rows = (
+                    await s.execute(
+                        sa_text(
+                            "SELECT c.chunk_id, c.heading_path, c.content, c.doc_id, "
+                            "bm25(doc_chunks_fts) AS rank "
+                            "FROM doc_chunks_fts f JOIN doc_chunks c ON c.chunk_id = f.chunk_id "
+                            "WHERE doc_chunks_fts MATCH :q ORDER BY rank LIMIT :n"
+                        ),
+                        {"q": match, "n": limit},
+                    )
+                ).fetchall()
+            except Exception:  # noqa: BLE001
+                log.warning("fts query failed for %r", query)
+                return []
+            # bm25 越小越相关，归一化到 0~1（经验：rank 常见 -20 ~ 0）
+            hits = []
+            for r in rows:
+                score = max(0.0, min(1.0, 1.0 + float(r.rank) / 20.0))
+                hits.append(KnowledgeHit(
+                    doc_title=r.doc_id, heading_path=r.heading_path, content=r.content,
+                    doc_version="", source="fts", score=score,
+                ))
+            return hits
+
+    async def _search_vector(self, query: str, limit: int) -> list[KnowledgeHit]:
+        if self._chroma_col is None:
+            return []
+        try:
+            vecs = await self._embed.embed([query])
+            if not vecs:
+                return []
+            res = self._chroma_col.query(
+                query_embeddings=[vecs[0]], n_results=min(limit, self._chroma_col.count() or 1),
+                include=["distances", "metadatas", "documents"],
+            )
+            hits = []
+            for i in range(len(res["ids"][0])):
+                meta = res["metadatas"][0][i]
+                hits.append(KnowledgeHit(
+                    doc_title=meta.get("doc_id", ""),
+                    heading_path=meta.get("heading_path", ""),
+                    content=res["documents"][0][i],
+                    doc_version=str(meta.get("version", "")),
+                    source="vector",
+                    score=max(0.0, 1.0 - float(res["distances"][0][i])),
+                ))
+            return hits
+        except Exception:  # noqa: BLE001
+            log.exception("L3 vector search failed")
+            return []
+
+
+def _extract_title(text: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return ""
+
+
+def _shared_embedding_client() -> EmbeddingClient:
+    from app.memory.embedding import create_embedding_client
+    return create_embedding_client()
+
+
+import asyncio  # noqa: E402
+import re  # noqa: E402
+from sqlalchemy import text as sa_text  # noqa: E402

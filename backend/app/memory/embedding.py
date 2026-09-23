@@ -21,7 +21,9 @@ class EmbeddingClient(Protocol):
 
 
 class ArkEmbeddingClient:
-    """Volces Ark OpenAI-compatible embeddings。批内一次请求。"""
+    """Volces Ark OpenAI-compatible embeddings。方舟限制单请求最多 10 条 input，自动分批。"""
+
+    BATCH_SIZE = 10
 
     def __init__(self, model: str | None = None, base_url: str | None = None, api_key: str | None = None) -> None:
         from openai import AsyncOpenAI
@@ -37,8 +39,12 @@ class ArkEmbeddingClient:
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        resp = await self._client.embeddings.create(model=self._model, input=texts)
-        return [item.embedding for item in resp.data]
+        out: list[list[float]] = []
+        for i in range(0, len(texts), self.BATCH_SIZE):
+            batch = texts[i : i + self.BATCH_SIZE]
+            resp = await self._client.embeddings.create(model=self._model, input=batch)
+            out.extend(item.embedding for item in resp.data)
+        return out
 
 
 class NullEmbeddingClient:

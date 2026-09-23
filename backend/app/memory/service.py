@@ -114,6 +114,7 @@ class SQLiteMemoryService:
         self._embed = embedding if embedding is not None else create_embedding_client()
         self._chroma = None       # 惰性初始化（init() 中）
         self._chroma_col = None
+        self._knowledge: KnowledgeBase | None = None  # L3 惰性初始化（首次 search）
 
     async def init(self) -> None:
         async with self._engine.begin() as conn:
@@ -317,5 +318,14 @@ class SQLiteMemoryService:
     # ---- L3 ----
 
     async def search_knowledge(self, query: str, *, limit: int = 8) -> list[KnowledgeHit]:
-        """第一阶段空实现：正式知识库检索待 ChromaDB+FTS5 接入。"""
-        return []
+        """L3 正式知识库检索（ADR-002）：委托 KnowledgeBase 双路融合。"""
+        from app.docs.knowledge import KnowledgeBase
+
+        if self._knowledge is None:
+            self._knowledge = KnowledgeBase(db_url=settings.memory_db_url, embedding=self._embed)
+            await self._knowledge.init()
+        try:
+            return await self._knowledge.search(query, limit=limit)
+        except Exception:  # noqa: BLE001 —— L3 故障不阻塞回答主链路
+            log.exception("knowledge search failed, degrade to empty")
+            return []
