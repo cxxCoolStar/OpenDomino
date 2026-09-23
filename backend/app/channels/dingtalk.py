@@ -9,6 +9,7 @@ SDK 导入延迟到 start()，便于无 SDK 环境下导入本模块做测试。
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import OrderedDict
 from typing import Awaitable, Callable
@@ -18,6 +19,8 @@ import httpx
 from app.channels.base import ChannelAdapter, SendResult, UnifiedMessage
 from app.channels.dingtalk_parse import ParsedDingTalkMessage, parse_message
 from app.config import settings
+
+log = logging.getLogger(__name__)
 
 MessageHandler = Callable[[UnifiedMessage], Awaitable[None]]
 
@@ -80,9 +83,19 @@ class DingTalkChannel(ChannelAdapter):
         """处理一条 SDK 原始报文。返回是否被采纳（通过门控且未去重）。"""
         msg = parse_message(data)
         if msg.message_id and self._dedup.is_duplicate(msg.message_id):
+            log.info("dingtalk duplicate message_id=%s dropped", msg.message_id)
             return False
         if not self._allowed(msg):
+            log.info(
+                "dingtalk message rejected by gate: message_id=%s chat_id=%s user=%s "
+                "is_group=%s is_at_bot=%s",
+                msg.message_id, msg.chat_id, msg.user_id, msg.is_group, msg.is_at_bot,
+            )
             return False
+        log.info(
+            "dingtalk message accepted: message_id=%s chat_id=%s user=%s text=%r",
+            msg.message_id, msg.chat_id, msg.user_id, msg.text[:80],
+        )
         if msg.session_webhook:
             self._cache_webhook(msg.chat_id, msg.session_webhook)
         unified = UnifiedMessage(
@@ -151,8 +164,16 @@ class DingTalkChannel(ChannelAdapter):
 
         class _Handler(ChatbotHandler):  # SDK requires a ChatbotHandler instance
             async def process(self, message):  # noqa: ANN001
+                # SDK >= 0.20 passes a CallbackMessage envelope; the chatbot
+                # payload dict is in .data. Unwrap it so parse_message sees the
+                # raw DingTalk fields (conversationId, isInAtList, ...).
+                data = getattr(message, "data", message)
+                if isinstance(data, str):
+                    import json
+
+                    data = json.loads(data)
                 # ACK quickly so a slow LLM response does not trigger DingTalk redelivery.
-                task = asyncio.create_task(channel.handle_raw(message))
+                task = asyncio.create_task(channel.handle_raw(data))
                 task.add_done_callback(_log_task_error)
                 return AckMessage.STATUS_OK, "ok"
 
