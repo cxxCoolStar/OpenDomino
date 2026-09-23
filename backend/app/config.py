@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # ---- ADR-002 记忆层 ----
     memory_db_url: str = "sqlite+aiosqlite:///./data/opendomino.db"
     chroma_persist_dir: str = "./data/chroma"
+    # Embedding（Phase C 向量召回）：填方舟推理接入点 ep-xxx 启用；留空则退回关键词召回
+    embedding_model: str = ""               # 例：ep-2024xxxxxx（doubao-embedding-large-text）
+    embedding_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    embedding_api_key: str = ""             # 缺省复用 LLM_API_KEY
+    embedding_dim: int = 2048
     memory_confirm_ttl_minutes: int = 60    # 待确认记忆 TTL（非阻塞提议，比澄清宽）
     memory_confirm_keywords: str = "确认,确定,同意,保存"
     memory_cancel_keywords: str = "取消,不用,不要,算了,放弃,不保存"

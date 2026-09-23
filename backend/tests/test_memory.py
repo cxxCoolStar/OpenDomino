@@ -107,16 +107,26 @@ async def test_recall_full_load_below_threshold(mem, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_recall_keyword_mode_above_threshold(mem, monkeypatch):
-    """条目数 > 阈值：切换关键词召回，不匹配的查询返回空。"""
+async def test_recall_keyword_mode_above_threshold(tmp_path, monkeypatch):
+    """条目数 > 阈值且未配置 embedding：关键词召回，不匹配的查询返回空。
+
+    （EMBEDDING_MODEL 已配置时超阈值走向量召回——语义上无绝对不相关，
+    向量行为由 test_vector_recall.py 覆盖，这里显式注入 Null 客户端测关键词路径。）
+    """
+    from app.memory.embedding import NullEmbeddingClient
+
     monkeypatch.setattr(settings, "kbase_full_load_threshold", 2)
+    svc = SQLiteMemoryService(
+        db_url=f"sqlite+aiosqlite:///{tmp_path}/t2.db", embedding=NullEmbeddingClient()
+    )
+    await svc.init()
     for i in range(4):
-        mid = await mem.create_memory_draft(
+        mid = await svc.create_memory_draft(
             MemoryDraft(title=f"条目{i}", statement=f"内容{i}")
         )
-        await mem.confirm_memory(mid, "u")
+        await svc.confirm_memory(mid, "u")
 
-    hits = await mem.recall_kbase("毫不相干")
+    hits = await svc.recall_kbase("毫不相干")
     assert hits == []
-    hits = await mem.recall_kbase("条目1")
+    hits = await svc.recall_kbase("条目1")
     assert len(hits) == 1
