@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import json
 import time
-
+from pathlib import Path
+from sqlalchemy.engine import make_url
 from sqlalchemy import Float, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -77,7 +78,11 @@ class SQLiteMemoryService:
     """默认实现。L1 全量实现；L2 草稿/确认落库但检索暂为关键词兜底；L3 暂空。"""
 
     def __init__(self, db_url: str | None = None) -> None:
-        self._engine = create_async_engine(db_url or settings.memory_db_url, echo=False)
+        resolved_url = db_url or settings.memory_db_url
+        parsed = make_url(resolved_url)
+        if parsed.get_backend_name() == "sqlite" and parsed.database not in (None, ":memory:"):
+            Path(parsed.database).parent.mkdir(parents=True, exist_ok=True)
+        self._engine = create_async_engine(resolved_url, echo=False)
         self._session = async_sessionmaker(self._engine, class_=AsyncSession, expire_on_commit=False)
 
     async def init(self) -> None:

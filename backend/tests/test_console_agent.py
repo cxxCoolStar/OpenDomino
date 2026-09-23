@@ -1,12 +1,17 @@
 """ConsoleAgent 端到端闭环测试（fake LLM + SQLite 记忆）。"""
 from __future__ import annotations
 
+import asyncio
+import time
+
 import pytest
 
 from app.channels.base import UnifiedMessage
+from app.config import settings
 from app.console.agent import ConsoleAgent
 from app.console.router import Router, _extract_json
 from app.memory.service import SQLiteMemoryService
+from app.memory.types import PendingState
 
 
 class FakeLLM:
@@ -84,6 +89,45 @@ async def test_clarify_sets_pending(env):
 
     sess = await mem.load_session("c1")
     assert sess.pending is not None and sess.pending.kind == "clarify"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resolution", ["answered", "new_question", "cancel"])
+async def test_pending_resolutions_clear_pending(env, resolution):
+    mem, replies, _ = env
+    session = await mem.load_session("c1")
+    session.pending = PendingState(kind="clarify", payload={"question": "哪个仓库？"})
+    await mem.save_session(session)
+    llm = FakeLLM([
+        f'{{"action":"answer","answer":"收到","pending_resolution":"{resolution}"}}'
+    ])
+
+    async def reply(c, t, webhook=""):
+        replies.append((c, t))
+
+    await ConsoleAgent(mem, Router(llm), reply).handle(make_msg("收到"))
+
+    assert (await mem.load_session("c1")).pending is None
+
+
+@pytest.mark.asyncio
+async def test_pending_expired_before_router_context(env, monkeypatch):
+    mem, replies, _ = env
+    monkeypatch.setattr(settings, "console_clarify_ttl_minutes", 30)
+    session = await mem.load_session("c1")
+    session.pending = PendingState(
+        kind="clarify", payload={"question": "旧问题"}, created_at=time.time() - 31 * 60
+    )
+    await mem.save_session(session)
+    llm = FakeLLM(['{"action":"answer","answer":"收到"}'])
+
+    async def reply(c, t, webhook=""):
+        replies.append((c, t))
+
+    await ConsoleAgent(mem, Router(llm), reply).handle(make_msg("新问题"))
+
+    assert "待澄清问题" not in llm.calls[0][1]
+    assert (await mem.load_session("c1")).pending is None
 
 
 @pytest.mark.asyncio

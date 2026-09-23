@@ -102,6 +102,13 @@ def test_deduplicator():
     assert d.is_duplicate("a") is False  # a 已被挤出，重新计为新
 
 
+def test_current_message_webhook_takes_precedence(monkeypatch):
+    ch = DingTalkChannel(lambda _: None)
+    ch._cache_webhook("c1", "https://hook/cached")
+
+    assert ch._fresh_webhook("c1", fallback="https://hook/current") == "https://hook/current"
+
+
 @pytest.mark.asyncio
 async def test_duplicate_message_dropped(collected, monkeypatch):
     monkeypatch.setattr(settings, "dingtalk_require_mention", False)

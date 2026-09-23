@@ -49,6 +49,7 @@ class ConsoleAgent:
 
     async def _pipeline(self, msg: UnifiedMessage) -> None:
         session = await self._memory.load_session(msg.chat_id)
+        self._expire_pending(session)
 
         # 追加用户消息
         session.messages.append(

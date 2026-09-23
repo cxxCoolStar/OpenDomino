@@ -105,12 +105,14 @@ class DingTalkChannel(ChannelAdapter):
         self._webhook_cache[chat_id] = (webhook, time.time() + _WEBHOOK_TTL_SECONDS)
 
     def _fresh_webhook(self, chat_id: str, fallback: str = "") -> str:
+        if fallback:
+            return fallback
         cached = self._webhook_cache.get(chat_id)
         if cached and cached[1] > time.time():
             return cached[0]
         if cached:
             del self._webhook_cache[chat_id]
-        return fallback
+        return ""
 
     async def reply(self, chat_id: str, text: str, *, session_webhook: str = "") -> SendResult:
         webhook = self._fresh_webhook(chat_id, fallback=session_webhook)
