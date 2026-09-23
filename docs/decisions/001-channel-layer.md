@@ -1,14 +1,21 @@
-# ADR-001 协作入口层：钉钉机器人 + Web 群聊
+# ADR-001 协作入口层：钉钉机器人（Stream 模式）
 
-> 状态：已确认
+> 状态：已确认（2026-09-23 修订：入口收敛为仅钉钉群聊，移除 Web 群聊；Web 端后期仅作管理后台）
 > 日期：2026-09-22
 > 决策参考：hermes-agent（`C:\Users\CoolStar\Downloads\hermes-agent`）
 
 ## 背景
 
 协作入口层是 OpenDomino 的最上层，负责把「用户在群里 @Domino 提问」这件事接进来，对上层的
-ConsoleAgent 屏蔽消息来源（钉钉 / Web）。原文强调「Agent 要进入工作，而不是让工作迁移到 Agent」，
-钉群是多数问题天然发生的地方，因此入口层是系统的第一块基石。
+ConsoleAgent 屏蔽消息来源。原文强调「Agent 要进入工作，而不是让工作迁移到 Agent」，钉群是
+多数问题天然发生的地方，因此入口层是系统的第一块基石。
+
+> **入口范围（2026-09-23 确认）**：第一阶段**只做钉钉群聊**，不做 Web 群聊，也不做私聊（DM）。
+> 依据原文——入口只有「绑定钉群 @机器人」，没有 Web 聊天入口，也没有私聊概念；原文刻意强调
+> 「不使用只能在 Web 页面中点击的交互式问答工具」。Web 群聊与私聊均为此前参考 hermes（多平台
+> 网关）时不当带入的能力，与 OpenDomino「团队协作工具」的复刻定位不符，故移除。
+> **Web 端后期仅作管理后台**（任务工作记录、KBase 治理、Dashboard、配置），不属于协作入口层，
+> 将独立成 ADR 讨论，不在本层范围。
 
 ## 核心决议：参考 hermes-agent 的「机制」，但不引入其代码
 
@@ -25,7 +32,7 @@ ConsoleAgent 屏蔽消息来源（钉钉 / Web）。原文强调「Agent 要进�
 |---|---|---|
 | Stream 模式连接 | `dingtalk-stream` SDK 维持长 WebSocket，注册 `ChatbotMessage` 回调收消息，无需公网回调地址 | ✅ 直接采用（最省事，无需公网穿透） |
 | 收发分离 | 收消息走 SDK 回调；发消息走消息携带的 `session_webhook`（httpx POST markdown） | ✅ 直接采用。session_webhook 5 分钟过期，需缓存并判过期 |
-| 群聊 @ 触发门控 | 群消息默认要求 @机器人，用 SDK 结构化 `is_in_at_list` 判断（**不用正则扒文本**）；DM 永远放行；支持 `require_mention` / `free_response_chats` / `allowed_chats` | ✅ 采用并简化。重点学「用 is_in_at_list 而非正则」（正则会误删邮箱 / SSH 中的 @） |
+| 群聊 @ 触发门控 | 群消息默认要求 @机器人，用 SDK 结构化 `is_in_at_list` 判断（**不用正则扒文本**）；支持 `require_mention` / `free_response_chats` / `allowed_chats` | ✅ 采用并简化。重点学「用 is_in_at_list 而非正则」（正则会误删邮箱 / SSH 中的 @）。hermes 的「DM 永远放行」不采用——OpenDomino 无私聊入口 |
 | 纯解析与 I/O 分离 | `inbound.py` 全为纯函数（`extract_text` / `extract_media`），无 I/O 无状态，可单测 | ✅ 借鉴。解析写成纯函数模块便于测试 |
 | 消息去重 | `MessageDeduplicator` 按 message_id 去重，防 Stream 重发 | ✅ 采用（内存集合 + 容量上限即可） |
 | 统一消息事件 | `MessageEvent` 把各平台消息归一化为单一结构 | ✅ 借鉴「归一化」思想，**砍掉约 90% 字段**，只保留核心字段 |
@@ -36,8 +43,10 @@ ConsoleAgent 屏蔽消息来源（钉钉 / Web）。原文强调「Agent 要进�
 - 🤔→🥳 表情反应（Thinking/Done）
 - 图片 / 语音 / 文件等富媒体下载与解析
 - 多平台抽象（signal / whatsapp / weixin 等）
+- **Web 群聊入口**（2026-09-23 移除，原文无此入口；Web 端后期仅作管理后台）
+- **私聊（DM）入口**（2026-09-23 移除，原文无私聊概念；DM 不响应或提示去群里）
 
-> 以上均为后续增强项，第一阶段只做**纯文本问答闭环**。
+> 以上均为后续增强项，第一阶段只做**钉钉群聊的纯文本问答闭环**。
 
 ## 三项已确认决议
 
@@ -52,24 +61,28 @@ backend/app/channels/
 ├── base.py            # UnifiedMessage（精简版 MessageEvent）+ ChannelAdapter 抽象接口
 │                      #   字段: text/type/user_id/user_name/chat_id/chat_name/is_group/
 │                      #         message_id/session_webhook/timestamp/raw
-├── dingtalk.py        # DingTalkChannel
+├── dingtalk.py        # DingTalkChannel（唯一消息入口）
 │                      #   - Stream 模式连接（dingtalk-stream SDK）
 │                      #   - 群聊 @ 门控（is_in_at_list）、用户白名单
 │                      #   - session_webhook 缓存 + 过期判断、markdown 回复
 │                      #   - 消息去重、断线重连
-├── dingtalk_parse.py  # 纯函数解析（extract_text/extract_media，无 I/O，可单测）
-└── web.py             # WebChannel（自家 Web 群聊，内部 API/WebSocket，无第三方依赖）
+└── dingtalk_parse.py  # 纯函数解析（extract_text/extract_media，无 I/O，可单测）
 ```
 
 ## 统一抽象
 
-两个 Channel 实现同一接口，对上层 ConsoleAgent 完全屏蔽消息来源：
+入口层只保留钉钉一个 Channel 实现。ChannelAdapter 抽象接口仍然保留——目的不是支持多消息
+入口，而是让 ConsoleAgent 不依赖具体通道、便于测试与回传寻址（ChannelRegistry 按 chat_id
+找到通道做 reply）：
 
 ```python
 class ChannelAdapter(Protocol):
     async def on_message(self, msg: UnifiedMessage) -> None: ...   # 入口：接消息
     async def reply(self, chat_id: str, text: str) -> SendResult: ...  # 出口：回消息
 ```
+
+> 注：UnifiedMessage 的 `is_group` / `session_webhook` 等字段沿用了多平台归一化的命名，
+> 第一阶段只有钉钉一种来源，不代表还有其他平台。
 
 ## 配置契约（对应 hermes plugin.yaml 的 env）
 

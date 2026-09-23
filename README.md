@@ -7,7 +7,7 @@
 ## 核心架构
 
 ```
-协作入口层（钉钉机器人 + Web 群聊）
+协作入口层（钉钉机器人，Stream 模式）
         │  @Domino 提问 · 群级会话延续 · 任务链接回传
         ▼
 ConsoleAgent（理解与路由，不直接改业务代码）
@@ -27,7 +27,8 @@ SandboxAgent（执行与交付，真实仓库沙箱）
 - 后端：Python FastAPI + SQLAlchemy + ChromaDB（向量记忆）+ Docker SDK（沙箱）
 - 前端：React + Vite + Ant Design
 - LLM：OpenAI 兼容接口（可配 base_url / api_key / model）
-- 群聊入口：钉钉机器人（Stream 模式）+ Web 模拟群聊双通道
+- 群聊入口：钉钉机器人（Stream 模式）
+- 管理后台：Web（任务记录 / KBase 治理 / Dashboard / 配置，后期建设，非聊天入口）
 - Git：真实提交；CodeReview / 部署 / AI 验证：简化闭环
 
 ## 设计原则（来自原文）
@@ -42,7 +43,7 @@ SandboxAgent（执行与交付，真实仓库沙箱）
 
 逐模块讨论确认后归档于 `docs/decisions/`：
 
-- [ADR-001 协作入口层：钉钉机器人 + Web 群聊](docs/decisions/001-channel-layer.md)
+- [ADR-001 协作入口层：钉钉机器人（Stream 模式）](docs/decisions/001-channel-layer.md)
 - [ADR-002 三层记忆：Session、KBase 与正式知识库](docs/decisions/002-memory-layer.md)
 - [ADR-003 ConsoleAgent：理解与路由](docs/decisions/003-console-agent.md)
 - [ADR-004 SandboxAgent：执行与交付](docs/decisions/004-sandbox-agent.md)
