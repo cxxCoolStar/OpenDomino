@@ -21,6 +21,10 @@ UnifiedMessage，借助三层记忆理解问题，然后三选一：直接回答
 
 ## 核心决议
 
+ADR-003 定义 ConsoleAgent 的职责边界：单次结构化路由，不做工具循环。决议按「路由与会话」「任务委派与并发」两组展开。
+
+### 路由与会话
+
 1. **单次结构化路由，不做 Agentic 工具循环**。每条消息一次 LLM 调用，输出 JSON 决策
    （answer / clarify / delegate），上下文在调用前由装配器一次性并行组装。
    - 理由：ConsoleAgent 的检索工具只有 recall_kbase / search_knowledge / load_session 三个，
@@ -34,6 +38,8 @@ UnifiedMessage，借助三层记忆理解问题，然后三选一：直接回答
    会把无关消息/表情误判为回答），也不做独立的前置分类调用。借鉴 cumora「主脑读完整上下文
    自行理解」的思路：把 pending 原文注入路由 Prompt，由同一次 LLM 调用同时输出路由决策与
    `pending_resolution`（answered / new_question / cancel）。
+### 任务委派与并发
+
 4. **任务委派即创建 Task 后异步执行**。ConsoleAgent 调用 `TaskService.create` 后立即回复群
    「已受理」，不等待、不轮询任务结果；任务状态变化由 SandboxAgent 经 ChannelRegistry 直接
    回传来源群（见「与 SandboxAgent 通信」）。
@@ -67,6 +73,8 @@ UnifiedMessage（来自 ADR-001 ChannelAdapter）
 `/沉淀` 命令不进入路由，直接触发记忆提炼流程（见「记忆提炼触发」）。
 
 ## 路由决策
+
+路由决策由一次 LLM 调用完成：输入装配好的上下文与用户消息，输出结构化 JSON 决议。决议包含动作类型、动作参数与 pending 处置元数据；解析失败重试一次后降级为原样回复。
 
 ### 决策输出 Schema
 
@@ -149,7 +157,11 @@ CLI 子进程（hermes bot relay 那套过重），也不走共享内存变量�
 3. 落库在前、通知在后：服务重启后 pending 任务从库里恢复重跑（呼应 ADR-002 可恢复原则）；
 4. fire-and-forget：拿到 task_id 即回复群「已受理」，不等结果（借 hermes bot 异步语义）。
 
-**回传（SandboxAgent → 群，数据流，不绕道 ConsoleAgent）**：
+### 回传链路
+
+SandboxAgent → 群的数据流不绕道 ConsoleAgent：
+
+
 
 - SandboxAgent 跑完后经 ChannelRegistry（chat_id → ChannelAdapter）直接 reply 到来源群；
 - ConsoleAgent 不参与回传链路，它作为普通会话上下文看到这条消息；
@@ -161,6 +173,8 @@ CLI 子进程（hermes bot relay 那套过重），也不走共享内存变量�
 （不可恢复）、外部 MQ（单实例过度设计，第一阶段用 asyncio.Queue + DB 恢复）。
 
 ## 任务委派与回传
+
+ConsoleAgent 通过 DelegateFn 提交任务草稿，提交后立即回群「已受理」，不等待任务完成。任务后续状态变化由 SandboxAgent 经频道层直接回传来源群，不经过 ConsoleAgent 转发。
 
 ### Task 概念模型（完整模型见 ADR-004）
 

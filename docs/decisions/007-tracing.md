@@ -55,7 +55,9 @@ from langfuse.openai import openai
 langfuse = get_client()                      # 单例，读 LANGFUSE_* 环境变量
 client = openai.OpenAI(base_url=...)         # 包装后，LLM 调用自动记 generation
 
-# ① 群消息进来：用消息 ID 做种子，生成确定性 trace_id
+#### 三个链路场景
+
+① 群消息进来：用消息 ID 做种子，生成确定性 trace_id
 trace_id = langfuse.create_trace_id(seed=f"msg-{message.message_id}")
 
 # ② ConsoleAgent：开根 span，路由/召回/委派都是子 span

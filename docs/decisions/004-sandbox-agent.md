@@ -28,6 +28,12 @@ SandboxAgent 是慢路径的执行侧，接收 ConsoleAgent 委派的 Task，在
 
 ## 核心决议
 
+以下是 SandboxAgent 的七条核心决议，覆盖执行模型、容器隔离、兜底交付与安全边界。这些决议与 ConsoleAgent 的单次路由模式刻意相反：编码任务必须迭代，因此执行体是受控的 Agentic 循环。
+
+### 执行与隔离
+
+SandboxAgent 是受控 Agentic 执行体：进入真实仓库完成任务并交付可审查的分支。核心决议如下：
+
 1. **执行采用受控 Agentic 工具循环**，与 ConsoleAgent 的单次路由刻意相反：编码任务无法
    一次性规划全部编辑，必须「观察仓库 → 编辑 → 跑测试 → 修正」迭代。边界用迭代上限、
    总超时、单命令超时、输出截断、反死循环五重护栏（见「资源与安全边界」）。
@@ -42,6 +48,8 @@ SandboxAgent 是慢路径的执行侧，接收 ConsoleAgent 委派的 Task，在
    - 同一工具+参数+结果重复 N 次（默认 3）→ 注入警告并 break；
    - 整轮工具全部失败 → 下一轮摘除工具，强制模型用已有信息作答；
    - 同一工具连败（与参数无关）→ 提前摘除工具。
+### 交付与安全
+
 5. **分支隔离，禁止直推主干**。改动提交到 `domino/task-{task_id}` 分支并 push；第一阶段
    不自动合并、不自动建 PR，评审由人在群内/平台完成。
 6. **砍掉部署钩子**。部署非执行 Agent 核心职责，第一阶段彻底不做，留待后续 ADR。
@@ -53,6 +61,12 @@ SandboxAgent 是慢路径的执行侧，接收 ConsoleAgent 委派的 Task，在
    不合并——业务资产不寄生在调试工具里（详见 ADR-007）。
 
 ## Task 数据模型
+
+Task 与 TaskEvent 是委派链路的两个持久化对象：Task 承载状态机，TaskEvent 承载业务留痕。
+
+### 字段与状态机
+
+Task 是跨 Agent 委派的持久化单元，字段与状态机定义如下：
 
 ```text
 Task
@@ -68,7 +82,9 @@ Task
 - created_at / updated_at
 ```
 
-TaskEvent（业务留痕，只追加，给用户看）：
+### TaskEvent 事件流
+
+TaskEvent 是业务留痕，只追加，给用户看：
 
 ```text
 TaskEvent
@@ -81,6 +97,14 @@ TaskEvent
 ```
 
 ## 执行管线
+
+执行管线描述任务从出队到分支交付的六个步骤，以及每一步失败后的恢复语义。管线由 TaskService 驱动：落库在前、通知在后，保证重启后 pending 任务可无损恢复；运行中的任务随容器现场消失，恢复时标记为 failed 而不是盲目重跑。
+
+### 管线步骤
+
+六步流水线如下：
+
+从任务出队到分支交付的完整流水线：
 
 ```text
 TaskService.create（ADR-003 delegate 动作）
@@ -109,6 +133,8 @@ Executor 领取任务（按仓库串行，TASK_MAX_CONCURRENCY 控制全局并�
 ```
 
 ## 容器池与工作区
+
+SandboxAgent 的执行环境是按仓库维度池化的 Docker 容器，工作区在任务间重置以保证隔离。
 
 ### 池化策略
 

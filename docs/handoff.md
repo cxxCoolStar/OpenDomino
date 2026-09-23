@@ -1,7 +1,7 @@
 # OpenDomino 开发交接
 
 > 更新日期：2026-09-23（第二次更新）
-> 当前阶段：**真实钉钉 → LLM → 钉钉回复闭环已验证通过**；ADR-002 Phase 0（记忆确认流 + 上下文装配重构 + 并发修复）已实现并上线；下一步 Phase A（LLM 提炼 + 滚动摘要）。
+> 当前阶段：**真实钉钉 → LLM → 钉钉回复闭环已验证通过**；ADR-002 Phase 0（记忆确认流 + 上下文装配重构 + 并发修复）已实现并上线；**SandboxAgent（ADR-004）全模块已落地（2026-09-23，Fake 测试全绿，Docker 集成待真机验证）**。
 
 ## 项目目标
 
@@ -9,16 +9,41 @@ OpenDomino 复刻「从钉群提问到任务交付」的团队级 Agent 基础�
 
 ## 当前实现
 
+后端主链路按「入口 → 记忆 → Agent → 沙箱」四层组织，位于 `backend/app/` 下。以下按层列出当前实现状态与关键能力，接手前请先通读本节再对照 ADR 细读。
+
+### 入口与会话
+
 后端位于 `backend/`，基于 Python 3.12、FastAPI、SQLAlchemy async/SQLite、OpenAI-compatible SDK 和 DingTalk Stream SDK。
 
 - **钉钉入口**：统一消息类型、消息解析、仅群聊、@ 门控、群/用户白名单、消息去重、session webhook 回复。SDK 回调已按真实 `dingtalk-stream` API 接入，并在收到消息后快速 ACK，再异步处理。
 - **L1 Session**：SQLite 持久化群消息、pending 状态、活跃任务 ID 和最近路由；SQLite 数据目录会在初始化时自动创建。
+### 记忆与知识库
+
 - **L2 KBase 基础**：草稿/确认记录可落库，普通召回只返回 confirmed 条目；当前召回是简单关键词匹配，不是 ADR 目标中的向量检索。
 - **L3 知识库**：接口已定义，当前返回空结果，尚未接文档导入、FTS5 或 ChromaDB。
+### Agent 与工具
+
 - **ConsoleAgent**：单次结构化 JSON 路由；answer / clarify / delegate 三种动作；同群串行锁；pending 澄清随 Session 持久化；LLM JSON 解析失败重试一次后降级回复。
 - **ToolRegistry**：注册、toolset 过滤、check_fn、参数类型强转、统一错误与结果截断已有基础实现；尚未注册沙箱实际工具，也未接入执行循环。
+### 沙箱与运行入口
+
+- **SandboxAgent（ADR-004，2026-09-23 落地）**：`app/sandbox/` 全套模块已实现——
+  - `types.py` 状态机 pending→running→review→done|failed|canceled；`storage.py` Task/TaskEvent 两表（TaskService：create 落库即返回、事件 seq 自增、重启恢复 pending 续跑/running 标失败）；
+  - `executor.py` 全局并发信号量 + 按仓库串行队列（worker 崩溃不退出）；`pipeline.py` run_task 管线（领取→取容器→建分支→执行循环→提交 push→预评审→待评审回传；异常转 failed 并归还容器）；
+  - `agent.py` 原生 function calling 执行循环 + 反死循环三重护栏（同调用 3 次注入警告/同工具连败 2 次摘工具/整轮全败 3 轮摘工具）+ 预算耗尽强制汇总 + 确定性历史裁剪；
+### 容器与回传
+
+- `container.py` 按 repo 池化容器（容器内 clone 规避 Windows bind-mount、setsid+marker+二次 exec 击杀进程组、idle TTL 驱逐）；`git_ops.py` 分支/提交/push/log/diff 封装；
+  - `tools.py` 8 个工具（list_dir/read_file/grep/write_file/apply_patch/run_command/git_diff/git_log）+ 危险命令拦截 + PAT 输出脱敏；`repo_config.py` REPO_{NAME}_* 环境变量解析与凭据收集；
+  - `reporter.py` 四类事件回传 + `channels/registry.py` 寻址；DingTalkChannel 新增机器人主动发消息 API（主通道，解决 session_webhook 5 分钟过期）+ webhook 兜底；
+  - `main.py` 已装配：TaskService→TaskExecutor→TaskPipeline→ConsoleAgent.delegate 真实接线（「SandboxAgent 未接入」占位已移除）。
+  - 测试 `tests/test_sandbox.py` 13 个（Fake 全覆盖，不依赖 Docker）；真实 Docker 集成待本地验证。
+### 运行入口
+
 - **运行入口**：`backend/app/main.py` 启动 FastAPI、SQLite 与钉钉 Stream；提供 `/health` 和 `/ready`。
-- **尚未实施**：SandboxAgent、Docker 容器池与任务队列、仓库绑定管理、SKILL loader/目录、Langfuse 埋点、管理后台。
+### 尚未实施
+
+- **尚未实施**：verify.py 独立 AI 验证与回炉（一期以预评审替代）、SKILL loader/目录、Langfuse 埋点、管理后台。
 
 ## 验证状态
 
@@ -35,6 +60,8 @@ OpenDomino 复刻「从钉群提问到任务交付」的团队级 Agent 基础�
 - ADR-001：仅钉钉群聊作为入口；不做私聊和 Web 群聊。Web 后期只作为管理后台。
 - ADR-002：L1 群级 Session、L2 团队 KBase、L3 正式知识库分层；团队记忆写入需要确认。**Phase 0 增补（已实现）**：双槽位 pending/pending_memory；确认流 `/沉淀` 建草稿群内确认、`记住:` 直达入库；确认词确定性拦截（@ 门控，不走 LLM）；拒绝/过期物理删除；上下文装配段落模型 + 预算反向填充；压缩设计（Phase A 实施）；并发模型。
 - ADR-003：ConsoleAgent 单次结构化路由；pending 判定和路由合并；群关联仓库；Task 持久化后异步执行。
+### 执行与观测层决议
+
 - ADR-004：SandboxAgent 使用受控 Agentic 循环；容器按仓库池化，任务工作区独占并重置；强制汇总、反死循环和安全护栏；TaskEvent 给团队看、Langfuse trace 给开发者排查。**详细设计已定稿（2026-09-23，见 `docs/design/sandbox-agent-detail.md`，未实现）**：原生 function calling 循环 + 8k 截断/确定性历史裁剪（LLM 摘要留二期）；TaskService 落库+入队即返回，重启时 pending 续跑、running 标 failed；容器按 repo 池化复用、**容器内 clone**（规避 Windows bind-mount I/O）；fastclaw 三层超时击杀（setsid+pgid+二次 exec kill）；回传走钉钉主动发消息 API + webhook 兜底 + TaskEvent 永远落库（session_webhook 5 分钟过期问题）；凭据 HTTPS+PAT+输出脱敏；工具集复用 ToolRegistry 全局单例、容器经 dispatch ctx 注入。
 - ADR-005：SKILL 由模型自主选择加载；系统提示只放技能目录，按需加载全文并预检依赖。
 - ADR-006：工具参考 hermes-agent，普通 Python handler + schema 注册到统一 ToolRegistry；ConsoleAgent 当前无工具循环。
@@ -42,7 +69,17 @@ OpenDomino 复刻「从钉群提问到任务交付」的团队级 Agent 基础�
 
 ## 下一步开发顺序
 
-### 1. Phase A：LLM 提炼 + 滚动摘要（当前最高优先级）
+按优先级排列，0 是当前最高优先级，其余顺序在 0 完成后可能按联调结果调整。每项都标注了对应 ADR；完成一项就把该项移入「当前实现」并更新验证状态。
+
+### 0. SandboxAgent 联调验证（当前最高优先级）
+
+代码已全部落地、Fake 测试全绿，但**尚未连真实 Docker 与真实钉钉**：
+
+- 本机启动 Docker Desktop，配 `REPO_{NAME}_URL/_TOKEN/_TEST_CMD` 环境变量，跑一个真实小仓库任务（clone→改代码→测试→push 分支）；
+- 钉钉机器人确认已开通「企业内部机器人发群消息」API 权限（`robot/groupMessages/send`），验证任务回传走主动 API 通道；
+- 跑通后可删掉 `SandboxAgent 未接入` 兜底分支（console/agent.py `_do_delegate` 已真实接线，该占位分支自然失效）。
+
+### 1. Phase A：LLM 提炼 + 滚动摘要
 
 LLM 已可用，Phase 0 的状态机和 `summary` 字段已就位，可直接开工：
 

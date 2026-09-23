@@ -22,7 +22,7 @@ CHUNK_MIN_CHARS = 50     # 低于并入相邻小节（规范）
 CHUNK_TARGET_CHARS = 600 # 二次切目标大小
 CHUNK_OVERLAP_CHARS = 50 # 二次切重叠
 
-_HEADING_RE = re.compile(r"^(#{1,3})\s+(.+?)\s*#*\s*$")
+_HEADING_RE = re.compile(r"^(#{1,4})\s+(.+?)\s*#*\s*$")
 _FENCE_RE = re.compile(r"^(```|~~~)")
 
 
@@ -100,10 +100,17 @@ def _build_heading_chain(sections: list[DocSection]) -> None:
         sec.levels = list(chain)
 
 
+def _code_block_dominant(body: str) -> bool:
+    """规范条款 4 推论：单个 fenced code block 占主体（>50%）的小节不做二次切分。
+    切开流水线图/配置示例会使命中块失去意义——代码块原子性优先于篇幅上限。"""
+    fences = re.findall(r"```[\s\S]*?```", body)
+    return bool(fences) and sum(len(f) for f in fences) > len(body) * 0.5
+
+
 def _split_long(sec: DocSection) -> list[DocSection]:
     """超长兜底：按空行段落切，段落不足按句切，目标 CHUNK_TARGET_CHARS，重叠 CHUNK_OVERLAP_CHARS。"""
     body = "".join(sec.lines[1:])  # 去掉标题行
-    if len(body) <= CHUNK_MAX_CHARS:
+    if len(body) <= CHUNK_MAX_CHARS or _code_block_dominant(body):
         return [sec]
 
     warnings = [

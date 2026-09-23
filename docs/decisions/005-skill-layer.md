@@ -32,6 +32,8 @@ KBase），但**没定 SKILL 怎么被选中加载**——这是本 ADR 要解�
 4. **frontmatter 声明 + 加载期可用性预检**。加载时求值 `requires{env,bins,tools}`，缺失则前置
    `[SKILL CURRENTLY UNAVAILABLE: ...]`，把「装了但跑不了」从运行期瞎找提前为加载期明示
    （fastclaw 教训：模型曾烧 19 分钟 `find /` 找一个没装的二进制）。
+### 作用域与治理
+
 5. **SKILL 只在 SandboxAgent 生效**。ConsoleAgent 是单次路由、不进真实仓库，不加载 SKILL；
    SKILL 的「执行步骤」语义天然属于执行侧。
 6. **第一阶段手工维护内置 SKILL**，复刻原文的核心技能；不做 skill-creator / find-skills 自动
