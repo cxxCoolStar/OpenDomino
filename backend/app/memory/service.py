@@ -61,6 +61,14 @@ class MemoryRow(Base):
     updated_at: Mapped[float] = mapped_column(Float, default=0.0)
 
 
+def _parse_keywords(keywords_json: str) -> list[str]:
+    try:
+        kws = json.loads(keywords_json or "[]")
+        return [str(k) for k in kws if k]
+    except (ValueError, TypeError):
+        return []
+
+
 def _session_from_row(row: SessionRow) -> SessionContext:
     msgs = [ChatMessage(**m) for m in json.loads(row.messages_json or "[]")]
     pending = PendingState(**json.loads(row.pending_json)) if row.pending_json else None
@@ -140,20 +148,36 @@ class SQLiteMemoryService:
     # ---- L2 ----
 
     async def recall_kbase(self, query: str, *, limit: int = 5) -> list[MemoryHit]:
-        """第一阶段：关键词包含的朴素匹配，仅返回 confirmed。后续换 ChromaDB 向量召回。"""
+        """分级召回（ADR-002）：confirmed 条目数 ≤ 阈值时全量注入（小库阶段
+        召回环节整体消失，规避中文子串匹配漏召回）；超过阈值才按关键词过滤。
+
+        关键词召回的中文整句匹配局限已在真实环境验证（"提交代码" vs
+        "代码合并前…"漏召回），向量检索在 Phase C 替换本实现。
+        """
         q = (query or "").strip()
-        if not q:
-            return []
         async with self._session() as s:
             rows = (
                 await s.execute(
                     select(MemoryRow).where(MemoryRow.status == MemoryStatus.CONFIRMED.value)
                 )
             ).scalars().all()
-        hits: list[MemoryHit] = []
+        confirmed = [
+            MemoryHit(
+                id=r.id, title=r.title, statement=r.statement,
+                memory_type=r.memory_type, rationale=r.rationale,
+                status=MemoryStatus.CONFIRMED,
+            )
+            for r in rows
+        ]
+        if len(confirmed) <= settings.kbase_full_load_threshold:
+            return confirmed[:limit]
+        if not q:
+            return []
+        hits = []
         for r in rows:
-            hay = f"{r.title}\n{r.statement}\n{r.keywords_json}"
-            if q in hay or any(tok and tok in hay for tok in q.split()):
+            hay = f"{r.title}\n{r.statement}"
+            keywords = _parse_keywords(r.keywords_json)
+            if q in hay or any(tok and tok in hay for tok in q.split()) or any(k and k in q for k in keywords):
                 hits.append(
                     MemoryHit(
                         id=r.id, title=r.title, statement=r.statement,

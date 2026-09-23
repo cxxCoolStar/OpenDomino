@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     memory_confirm_ttl_minutes: int = 60    # 待确认记忆 TTL（非阻塞提议，比澄清宽）
     memory_confirm_keywords: str = "确认,确定,同意,保存"
     memory_cancel_keywords: str = "取消,不用,不要,算了,放弃,不保存"
+    kbase_full_load_threshold: int = 20     # confirmed 条目数 ≤ 阈值时全量注入，超过才走召回
     session_compact_trigger: int = 40       # 消息数达到此值触发压缩（窗口的 2 倍）
     session_summary_max_chars: int = 1500
 

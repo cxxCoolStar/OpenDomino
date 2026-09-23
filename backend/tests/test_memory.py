@@ -81,3 +81,42 @@ async def test_get_memory(mem):
     m = await mem.get_memory(mid)
     assert m is not None and m.title == "t" and m.status == MemoryStatus.PENDING
     assert await mem.get_memory("nope") is None
+
+
+# ---- 分级召回（路线 A）----
+
+import pytest
+
+from app.config import settings
+from app.memory.types import MemoryDraft
+
+
+@pytest.mark.asyncio
+async def test_recall_full_load_below_threshold(mem, monkeypatch):
+    """条目数 ≤ 阈值：全量注入，不依赖查询匹配。"""
+    monkeypatch.setattr(settings, "kbase_full_load_threshold", 5)
+    for i in range(3):
+        mid = await mem.create_memory_draft(
+            MemoryDraft(title=f"约定{i}", statement=f"完全无关的内容{i}")
+        )
+        await mem.confirm_memory(mid, "u")
+
+    # 查询词与任何条目都不匹配，仍应全量返回
+    hits = await mem.recall_kbase("毫不相干的查询词")
+    assert len(hits) == 3
+
+
+@pytest.mark.asyncio
+async def test_recall_keyword_mode_above_threshold(mem, monkeypatch):
+    """条目数 > 阈值：切换关键词召回，不匹配的查询返回空。"""
+    monkeypatch.setattr(settings, "kbase_full_load_threshold", 2)
+    for i in range(4):
+        mid = await mem.create_memory_draft(
+            MemoryDraft(title=f"条目{i}", statement=f"内容{i}")
+        )
+        await mem.confirm_memory(mid, "u")
+
+    hits = await mem.recall_kbase("毫不相干")
+    assert hits == []
+    hits = await mem.recall_kbase("条目1")
+    assert len(hits) == 1
