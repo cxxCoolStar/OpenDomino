@@ -51,7 +51,9 @@ class ConsoleAgent:
                 await self._pipeline(msg)
             except Exception:  # noqa: BLE001
                 log.exception("console pipeline failed for chat %s", msg.chat_id)
-                await self._reply(msg.chat_id, "处理时出错了，请稍后再试。", msg.session_webhook)
+                await self._reply(
+                    msg.chat_id, "模型服务暂时不可用，请稍后再试。", msg.session_webhook
+                )
 
     async def _pipeline(self, msg: UnifiedMessage) -> None:
         session = await self._memory.load_session(msg.chat_id)
