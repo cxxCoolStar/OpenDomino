@@ -194,31 +194,62 @@ class KnowledgeBase:
             return []
         fts_hits, vec_hits = await asyncio.gather(self._search_fts(query, 10), self._search_vector(query, 10))
 
+        # 两路分数尺度不可比（BM25 归一化后仍偏 0.7+，向量常驻 0.4~0.55），
+        # 用 rank 融合：每路第 k 名得 1/(60+k)（RRF, k=60 经验值），求和合并。
         merged: dict[str, tuple[float, KnowledgeHit, set[str]]] = {}
+
+        def _key(h: KnowledgeHit) -> str:
+            return f"{h.heading_path}|{h.content[:50]}"
+
         for hits in (fts_hits, vec_hits):
-            for hit in hits:
-                key = f"{hit.source}|{hit.heading_path}|{hit.content[:50]}"
+            for rank, hit in enumerate(hits, start=1):
+                rrf = 1.0 / (60.0 + rank)
+                key = _key(hit)
                 if key not in merged:
-                    merged[key] = (hit.score, hit, {hit.source})
+                    merged[key] = (rrf, hit, {hit.source})
                 else:
                     score, k, legs = merged[key]
                     legs.add(hit.source)
-                    merged[key] = (max(score, hit.score), k, legs)
+                    merged[key] = (score + rrf, k, legs)
 
-        # 两路都命中 → 加成后置前（强信号）
         results: list[KnowledgeHit] = []
         for score, k, legs in merged.values():
+            k.score = score * 20.0  # 归一化到展示友好区间（榜首约 0.033*2=0.65 量级不直观，改用相对值）
             if len(legs) > 1:
-                k.score = min(1.0, score + 0.15)
                 k.source = "both"
             results.append(k)
         results.sort(key=lambda k: -k.score)
+        # 分数映射：把 RRF 总分线性拉伸，第一名 ≈ 1.0
+        if results:
+            top = results[0].score
+            if top > 0:
+                for k in results:
+                    k.score = round(k.score / top, 3)
         return results[:limit]
+
+    @staticmethod
+    def _fts_tokens(query: str) -> list[str]:
+        """FTS5 unicode61 分词对中文整句是短语匹配语义——整句带"的/？"
+        时零命中。因此查询侧先切 token：ASCII 词整取，连续 CJK 段切 2-gram
+        （bigram 免词典、精度接近词级），去重保序。"""
+        tokens: list[str] = []
+        for seg in re.split(r"\s+", query.strip()):
+            if not seg:
+                continue
+            if seg.isascii():
+                tokens.append(seg)
+                continue
+            cjk = re.sub(r"[^\u4e00-\u9fff]", "", seg)
+            if len(cjk) >= 2:
+                tokens.extend(cjk[i : i + 2] for i in range(len(cjk) - 1))
+            elif cjk:
+                tokens.append(cjk)
+        seen: set[str] = set()
+        return [t for t in tokens if not (t in seen or seen.add(t))]
 
     async def _search_fts(self, query: str, limit: int) -> list[KnowledgeHit]:
         async with self._session() as s:
-            # FTS5 默认 unicode61 分词对中文按字切，短语查询用 OR 连接各 token
-            tokens = [t for t in re.split(r"\s+", query.strip()) if t]
+            tokens = self._fts_tokens(query)
             match = " OR ".join(f'"{t}"' for t in tokens) or '""'
             try:
                 rows = (
