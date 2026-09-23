@@ -221,12 +221,13 @@ MemoryEntry
 
 ### KBase 检索
 
-**分级召回（Phase 0 落地，真实环境验证后确定）**：
+**三级召回（Phase C 向量已落地，2026-09-23）**：
 
-- confirmed 条目数 ≤ `kbase_full_load_threshold`（默认 20）时**全量注入**上下文——小库阶段召回环节整体消失，规避检索 miss；hermes `build_memory_guidance` 同样允许记忆少时全量给出；
-- 超过阈值才按查询过滤（当前为关键词匹配，含 keywords 字段反向命中）；向量检索在 Phase C 替换；
-- 切换动机：中文子串匹配在真实环境漏召回（查询"提交代码前要做什么"无法命中"代码合并前必须通过全部测试"，语义相关但无公共子串）；全量注入使该问题在库小的时候不存在；
-- 使用问题语义生成 embedding 的向量召回仍是 Phase C 目标，本策略是其天然兜底层。
+1. **全量注入**：confirmed 条目数 ≤ `kbase_full_load_threshold`（默认 20）时全量注入上下文，召回环节整体消失（hermes `build_memory_guidance` 同样允许记忆少时全量给出）；
+2. **向量召回**（已上线）：条目超阈值且 `EMBEDDING_MODEL` 已配置 → ChromaDB（cosine 空间）+ 方舟 embedding（doubao-embedding-large-text，2048 维，OpenAI-compatible `/embeddings`，独立 base_url `ark/api/v3`，模型名直调无需 ep 接入点）。确认即索引、删除即同步删向量；查询向量召回 confirmed 条目，score = 1 − cosine 距离随条目返回；
+3. **关键词召回**（兜底）：未配置 embedding 或向量召回失败时使用（含 keywords 反向命中）。中文整句子串匹配有局限（真实环境验证："提交代码"漏召"代码合并前…"），故向量是其上位替代。
+
+失败降级链：向量召回异常 → 记日志退关键词 → 仍不影响回答主链路。embedding 客户端可插拔（`EmbeddingClient` 协议），测试可注入 Null/Fake。
 
 - 返回条目本体、相似度、状态和来源；
 - 只将达到阈值且状态为 `confirmed` 的条目作为回答依据；
