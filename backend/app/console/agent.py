@@ -71,6 +71,10 @@ class ConsoleAgent:
             )
         )
 
+        # 滚动压缩（Phase A）：溢出消息在路由前压进摘要
+        from app.console.compaction import maybe_compact
+        await maybe_compact(session, self._router.llm)
+
         context = await self._assembler.assemble(session, msg.text)
         decision = await self._router.route(context, msg.text)
 
@@ -94,6 +98,14 @@ class ConsoleAgent:
         elif decision.action == Action.DELEGATE:
             reply_text = await self._do_delegate(session, msg, decision)
 
+        # 纠正提炼（Phase A）：用户纠正 → 自动建草稿进入确认流（复用 Phase 0 状态机）
+        if (
+            decision.correction_detected
+            and decision.action == Action.ANSWER
+            and session.pending_memory is None          # 已有待确认时不叠加（T2 同规则）
+        ):
+            reply_text = await self._draft_correction(session, msg, decision, reply_text)
+
         if reply_text:
             await self._reply(msg.chat_id, reply_text, msg.session_webhook)
             session.messages.append(ChatMessage(role="assistant", text=reply_text))
@@ -109,6 +121,37 @@ class ConsoleAgent:
         if resolution in (PendingResolution.ANSWERED, PendingResolution.NEW_QUESTION, PendingResolution.CANCEL):
             session.pending = None
         # NONE 时保留 pending（用户没正面回应，留待下一条）
+
+    async def _draft_correction(self, session, msg: UnifiedMessage, decision, reply_text: str) -> str:
+        """纠正提炼：从纠正消息建草稿，挂 pending_memory，回复末尾附确认提示。"""
+        from app.memory.types import MemoryDraft
+
+        fact = self._extract_correction_fact(decision.answer)
+        if not fact:
+            return reply_text
+        draft = MemoryDraft(
+            title=fact[:30],
+            statement=fact,
+            memory_type="decision",
+            source_session_id=session.session_id,
+        )
+        memory_id = await self._memory.create_memory_draft(draft)
+        session.pending_memory = PendingState(
+            kind="memory_confirm", payload={"memory_id": memory_id}
+        )
+        log.info("correction drafted: chat=%s memory=%s", msg.chat_id, memory_id)
+        return reply_text
+
+    @staticmethod
+    def _extract_correction_fact(answer: str) -> str:
+        """从回答中取纠正后的事实：优先「（待确认）」标注句，否则取首段。"""
+        for line in answer.splitlines():
+            if "待确认" in line or "团队" in line:
+                cleaned = line.strip().lstrip("-*1234567890.、 【】").strip()
+                if cleaned:
+                    return cleaned[:200]
+        first = answer.strip().splitlines()[0] if answer.strip() else ""
+        return first[:200]
 
     async def _do_delegate(self, session, msg: UnifiedMessage, decision) -> str:
         task = decision.task

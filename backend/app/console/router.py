@@ -37,6 +37,11 @@ class Router:
         self._llm = llm
         self._system = build_route_system(Decision.json_schema_hint())
 
+    @property
+    def llm(self) -> LLMClient:
+        """压缩等辅助功能复用同一 LLM 客户端。"""
+        return self._llm
+
     async def route(self, context: str, user_text: str) -> Decision:
         user = f"{context}\n\n[用户本条消息]\n{user_text}" if context else user_text
         raw = await self._llm.complete(self._system, user)
