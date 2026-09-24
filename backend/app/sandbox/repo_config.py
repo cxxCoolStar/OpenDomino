@@ -11,6 +11,8 @@ import os
 import re
 from dataclasses import dataclass
 
+from app.config import settings
+
 log = logging.getLogger(__name__)
 
 # 匹配 REPO_{NAME}_URL|IMAGE|SETUP_CMD|TEST_CMD|TOKEN
@@ -35,7 +37,13 @@ class RepoExecutionConfig:
 
 
 def _global_github_token() -> str:
-    """全局 GitHub token（GITHUB_TOKEN）。REPO_{NAME}_TOKEN 未配置时的兜底凭据。"""
+    """全局 GitHub token（GITHUB_TOKEN）。REPO_{NAME}_TOKEN 未配置时的兜底凭据。
+
+    注意：pydantic-settings 只把 .env 读进 Settings 对象、不注入 os.environ，
+    所以必须从 settings.github_token 取（os.environ 只在真环境变量时生效）。
+    """
+    if settings.github_token:
+        return settings.github_token
     return os.environ.get("GITHUB_TOKEN", "")
 
 
