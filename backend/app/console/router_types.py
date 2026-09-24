@@ -23,6 +23,7 @@ class TaskSpec(BaseModel):
     title: str = ""
     instruction: str = ""
     repo: str = ""
+    type: str = "investigate"   # investigate=排查给结论 | modify=变更代码（默认排查）
 
 
 class Decision(BaseModel):
@@ -39,7 +40,9 @@ class Decision(BaseModel):
             '{"action":"answer|clarify|delegate",'
             '"answer":"带来源标记的回答(action=answer)",'
             '"clarify_question":"澄清问题(action=clarify)",'
-            '"task":{"title":"..","instruction":"自包含任务指令","repo":"仓库名"}(action=delegate),'
+            '"task":{"title":"..","instruction":"自包含任务指令","repo":"仓库名",'
+            '"type":"investigate|modify"}(action=delegate;investigate=要排查结论(为什么/在哪/如何实现),'
+            'modify=要改动仓库代码;拿不准填investigate),'
             '"pending_resolution":"answered|new_question|cancel|none",'
             '"correction_detected":false}'
         )

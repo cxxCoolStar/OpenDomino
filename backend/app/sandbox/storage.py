@@ -36,6 +36,7 @@ class TaskRow(Base):
     chat_id: Mapped[str] = mapped_column(String(128), default="")
     session_id: Mapped[str] = mapped_column(String(64), default="")
     created_by: Mapped[str] = mapped_column(String(128), default="")
+    type: Mapped[str] = mapped_column(String(32), default="investigate")  # investigate | modify
     trace_id: Mapped[str] = mapped_column(String(64), default="")
     status: Mapped[str] = mapped_column(String(32), default=TaskStatus.PENDING.value)
     branch_name: Mapped[str] = mapped_column(String(256), default="")
@@ -76,6 +77,12 @@ class TaskService:
     async def init(self) -> None:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # 轻量列迁移：create_all 不给已有表加列
+            for ddl in ("ALTER TABLE sandbox_tasks ADD COLUMN type VARCHAR(32) DEFAULT 'investigate'",):
+                try:
+                    await conn.exec_driver_sql(ddl)
+                except Exception:  # 列已存在
+                    pass
 
     async def close(self) -> None:
         await self._engine.dispose()
@@ -96,6 +103,7 @@ class TaskService:
                     chat_id=draft.get("chat_id", ""),
                     session_id=draft.get("session_id", ""),
                     created_by=draft.get("created_by", ""),
+                    type=draft.get("type") if draft.get("type") in ("investigate", "modify") else "investigate",
                     trace_id=draft.get("trace_id", ""),
                     status=TaskStatus.PENDING.value,
                     created_at=now,
@@ -264,6 +272,7 @@ def _task_from_row(row: TaskRow) -> Task:
         chat_id=row.chat_id,
         session_id=row.session_id,
         created_by=row.created_by,
+        type=row.type,
         trace_id=row.trace_id,
         status=TaskStatus(row.status),
         branch_name=row.branch_name,

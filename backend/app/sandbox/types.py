@@ -58,6 +58,7 @@ class Task:
     chat_id: str
     session_id: str
     created_by: str
+    type: str = "investigate"   # investigate=排查给结论 | modify=变更代码
     trace_id: str = ""
     status: TaskStatus = TaskStatus.PENDING
     branch_name: str = ""

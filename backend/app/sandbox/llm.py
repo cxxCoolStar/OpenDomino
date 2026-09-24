@@ -46,7 +46,7 @@ class OpenAIChatClient:
         )
     async def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResult:
         kwargs: dict[str, Any] = {
-            "model": settings.sandbox_model,
+            "model": settings.sandbox_model or settings.console_model,  # 留空复用 console 模型
             "messages": messages,
             "temperature": 0.2,
         }

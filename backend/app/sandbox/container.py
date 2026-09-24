@@ -28,6 +28,10 @@ class ContainerError(RuntimeError):
     pass
 
 
+class ExecError(RuntimeError):
+    """容器执行层失败（OCI/chdir/命令缺失），区别于命令自身的非零退出。"""
+
+
 @dataclass
 class _PoolEntry:
     container: object          # docker.models.containers.Container
@@ -42,8 +46,13 @@ class DockerExecutor:
         self._entry = entry
         self.repo = repo
 
-    async def exec(self, command: str, *, timeout: float | None = None) -> str:
-        """容器内执行 shell 命令。setsid 包装 + 超时后二次 exec 杀进程组。"""
+    async def exec(self, command: str, *, timeout: float | None = None, workdir: str | None = None) -> str:
+        """容器内执行 shell 命令。setsid 包装 + 超时后二次 exec 杀进程组。
+
+        workdir 默认 /workspace（初始化阶段可用 workdir="/" 覆盖）。
+        错误分层（fastclaw 模式）：执行层失败（OCI 错误、exit 125/126/127）抛 ExecError，
+        调用方以异常为判据；命令自身的非零退出正常返回输出。
+        """
         limit = settings.sandbox_command_timeout_seconds if timeout is None else timeout
         loop = asyncio.get_running_loop()
         marker = f"/tmp/.domino-pgid-{uuid.uuid4().hex[:12]}"
@@ -51,25 +60,35 @@ class DockerExecutor:
             f"setsid sh -c 'echo $$ > {marker}; {command}; rc=$?; rm -f {marker}; exit $rc'"
         )
         holder = self._entry.container
+        wd = workdir or _WORKDIR
 
-        def _run() -> tuple[bytes, bytes]:
-            return holder.exec_run(
+        def _run() -> tuple[int | None, bytes, bytes]:
+            r = holder.exec_run(
                 cmd=["sh", "-c", wrapped],
-                workdir=_WORKDIR,
+                workdir=wd,
                 demux=True,
             )
+            out = r.output or (b"", b"")
+            return r.exit_code, out[0] or b"", out[1] or b""
 
         try:
-            result = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=limit + 10)
+            exit_code, stdout_b, stderr_b = await asyncio.wait_for(
+                loop.run_in_executor(None, _run), timeout=limit + 10
+            )
         except asyncio.TimeoutError:
             # 宿主侧超时：容器内进程组可能还活着 → 另起 exec 击杀（5s 预算）
             await self._kill_group(holder, marker)
             raise TimeoutError(f"命令超时（{limit}s）且进程组已被击杀: {command[:80]}")
 
-        exit_code = result.exit_code
-        out = result.output or (b"", b"")
-        stdout = (out[0] or b"").decode("utf-8", errors="replace")
-        stderr = (out[1] or b"").decode("utf-8", errors="replace")
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+
+        # 执行层失败：exit 125/126/127 是 docker 运行时/命令缺失的信号（125=OCI 错误、
+        # 126=不可执行、127=命令不存在），不作为模型可见的"命令失败"回填，抛 ExecError
+        combined_err = (stdout + stderr).strip()
+        if exit_code in (125, 126, 127):
+            raise ExecError(f"容器执行层失败 (exit {exit_code}): {combined_err[:300]}")
+
         text = stdout if not stderr else f"{stdout}\n[stderr]\n{stderr}"
         if exit_code not in (0, None):
             text = f"{text}\n[exit {exit_code}]" if text else f"[exit {exit_code}]"
@@ -139,9 +158,13 @@ def _q(path: str) -> str:
 
 
 async def _ensure_git(executor: "DockerExecutor") -> None:
-    """容器内 git 缺失时现场安装（按包管理器探测；已装则零开销跳过）。"""
-    probe = await executor.exec("command -v git", timeout=30)
-    if probe.strip():
+    """容器内 git 缺失时现场安装（按包管理器探测；已装则零开销跳过）。
+
+    探测命令用 `|| echo MISSING` 收尾保证 exit 0——否则 git 缺失时
+    `command -v git` 自身 exit 127，会触发 exec 的执行层错误分层。
+    """
+    probe = await executor.exec("command -v git || echo MISSING", timeout=30)
+    if "MISSING" not in probe:
         return
     log.info("git missing in container, installing...")
     out = await executor.exec(
@@ -150,8 +173,8 @@ async def _ensure_git(executor: "DockerExecutor") -> None:
         "(yum install -y git)",
         timeout=600,
     )
-    check = await executor.exec("command -v git", timeout=30)
-    if not check.strip():
+    check = await executor.exec("command -v git || echo MISSING", timeout=30)
+    if "MISSING" in check:
         raise ContainerError(f"容器内 git 安装失败: {out[-500:]}")
 
 
@@ -207,7 +230,8 @@ class ContainerPool:
                 image,
                 command=["tail", "-f", "/dev/null"],
                 detach=True,
-                cpus=settings.sandbox_cpus,
+                # docker SDK 的 CPU 限额走 nano_cpus（1 核 = 1e9），非 --cpus
+                nano_cpus=int(settings.sandbox_cpus * 1e9),
                 mem_limit=settings.sandbox_mem_limit,
                 # 端口由任务内部按需起服务；这里不暴露任何端口到公网
                 ports={},
@@ -218,14 +242,23 @@ class ContainerPool:
         container = await loop.run_in_executor(None, _run)
         entry = _PoolEntry(container=container, repo_config=cfg, last_used=time.time())
 
-        # clone（容器内，Linux 原生 I/O）；凭据织入 URL，不落盘、不进镜像。
-        # 基础镜像（python:3.12-slim 等）可能不带 git：缺失则现场安装（幂等，容器复用时跳过）
+        # 初始化序列（顺序敏感）：所有 exec 默认 workdir=/workspace，而 clone 的目标正是
+        # /workspace——容器刚创建时它不存在，先在 root 下 mkdir 兜底（fastclaw 用 bind-mount
+        # 物理保证同一点；容器内 clone 方案下靠这条初始化命令 + 后续就绪校验）。
         executor = DockerExecutor(entry, cfg.name)
+        await executor.exec(f"mkdir -p {_WORKDIR}", timeout=60, workdir="/")
+
+        # 基础镜像（python:3.12-slim 等）可能不带 git：缺失则现场安装（幂等，容器复用时跳过）
         await _ensure_git(executor)
         await executor.exec(
             f"git clone {_q(cfg.clone_url)} {_WORKDIR} 2>&1",
             timeout=300,
         )
+        # 就绪校验：clone 失败绝不静默——工作区必须真的就绪（fastclaw StatusCrashed 模式）。
+        # git 此刻必已安装（_ensure_git 保证），rev-parse 失败会以 exit 非0 正常返回
+        probe = await executor.exec("git rev-parse --is-inside-work-tree || echo NOT_A_REPO", timeout=60)
+        if "true" not in probe:
+            raise ContainerError(f"clone 后工作区未就绪（probe={probe.strip()[:120]}）")
         if cfg.setup_cmd:
             await executor.exec(cfg.setup_cmd, timeout=900)
         return entry

@@ -44,3 +44,11 @@ L3 知识库做切块检索，文档结构直接决定检索质量。要点：
 - NEVER write unit tests after you write code.
 - Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact.
 - If you must test a system in isolation, FIRST write all the ways it could fail, THEN write the code.
+
+## 问题修复方式（最高优先级行为规则）
+
+发现问题时（测试失败、报错、行为与预期不符），**先讨论再动手**，不要径自修复：
+
+1. **先呈现问题**：把根因、影响面、你的修复方案（可含多个选项及取舍）摆出来与我确认；
+2. **重大偏离必须停下**：如果修复过程中发现新的、更大的问题（如逻辑漏洞、设计缺陷），先报告新问题，与原修复一起讨论后再动；
+3. **禁止顺手扩大改动面**：修 A 问题时不允许顺带改 B 处"反正也要改"——B 单独提出讨论。

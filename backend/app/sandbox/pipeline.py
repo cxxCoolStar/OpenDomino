@@ -53,6 +53,12 @@ class TaskPipeline:
 
             # 工作区重置到基线（首次为当前 HEAD；恢复任务用库里的 base_ref）
             base_ref = await self.pool.reset_workspace(task.repo, executor, task.base_ref)
+
+            # 排查任务：只读路径——不建分支、不提交；结论即交付物（原文主路径）
+            if task.type == "investigate":
+                await self._run_investigate(task_id, task, executor, base_ref)
+                return
+
             await self.tasks.set_running(
                 task_id, branch_name=f"domino/task-{task_id[:8]}", base_ref=base_ref
             )
@@ -77,12 +83,18 @@ class TaskPipeline:
                 await self.reporter.finished(task)
                 return
 
-            # 提交与推送（空改动也能交付：说明无代码修改必要）
+            # 提交与推送（空改动=模型未产生提交，拒绝交付——防"空转被误判完成"）
             sha = await git_ops.commit(executor, f"domino: {task.title}")
-            commits = []
-            if sha:
-                await git_ops.push(executor, branch)
-                commits = await git_ops.commit_log(executor, base_ref)
+            if not sha:
+                error = "模型未产生任何代码提交，任务无法交付"
+                log.warning("modify task without commits: %s", task_id)
+                await self.tasks.finish(task_id, TaskStatus.FAILED, error=error)
+                task.status = TaskStatus.FAILED
+                task.error = error
+                await self.reporter.finished(task)
+                return
+            commits = await git_ops.commit_log(executor, base_ref)
+            await git_ops.push(executor, branch)
             diff_stat = await git_ops.diff_stat(executor, base_ref)
             full_diff = await git_ops.full_diff(executor, base_ref)
 
@@ -121,6 +133,37 @@ class TaskPipeline:
             # agent 回调是同步 lambda 兼容；此处转 async append_event
             pass  # 事件经 agent 内部 on_event 同步收集，由 reporter.event 落库
         return _emit
+
+    async def _run_investigate(self, task_id: str, task: Task, executor, base_ref: str) -> None:
+        """排查任务（原文主路径）：只读真实仓库 + 跑命令复现，结论即交付物。
+
+        不建分支、不 commit/push、不进 review 状态机；workspace 无写要求。
+        """
+        await self.reporter.started(task)
+
+        ctx = ToolContext(executor=executor, repo=task.repo, task_id=task_id)
+        started = time.time()
+        result = await self.agent.run(task, ctx, on_event=self._on_event(task))
+        log.info(
+            "investigate loop finished task=%s status=%s steps=%d %.1fs",
+            task_id, result.status, result.steps_used, time.time() - started,
+        )
+
+        if result.status == "failed" or not result.summary.strip():
+            error = result.error or "排查未产出结论"
+            await self.tasks.finish(task_id, TaskStatus.FAILED, error=error)
+            task.status = TaskStatus.FAILED
+            task.error = error
+            await self.reporter.finished(task)
+            return
+
+        await self.tasks.finish(task_id, TaskStatus.DONE, verify_result="conclusion")
+        task.status = TaskStatus.DONE
+        task.verify_result = "conclusion"
+        await self.reporter.concluded(task, result.summary)
+        await self.tasks.append_event(
+            task_id, TaskStage.REPORT, "stage_exit", "排查结论已回传群聊"
+        )
 
     async def _pre_review(self, task: Task, diff: str, summary: str) -> str:
         """轻量预评审：直接把执行循环的汇总作为评审要点返回（verify.py 一期后补独立评审）。"""

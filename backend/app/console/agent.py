@@ -165,6 +165,7 @@ class ConsoleAgent:
             "title": task.title or msg.text[:30],
             "instruction": task.instruction,
             "repo": task.repo,
+            "type": task.type if task.type in ("investigate", "modify") else "investigate",
             "chat_id": msg.chat_id,
             "session_id": session.session_id,
             "created_by": msg.user_id,

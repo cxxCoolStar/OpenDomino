@@ -32,10 +32,18 @@ class TaskReporter:
         )
 
     async def started(self, task: Task) -> None:
+        kind = "排查" if task.type == "investigate" else "变更"
         await self._notify(
             task,
-            f"🚀 任务 #{_short(task.id)} 开始执行：{task.title}\n"
-            f"分支：`{task.branch_name}`（基于 {task.base_ref[:8]}）",
+            f"🚀 {kind}任务 #{_short(task.id)} 开始执行：{task.title}"
+            + (f"\n分支：`{task.branch_name}`（基于 {task.base_ref[:8]}）" if task.branch_name else ""),
+        )
+
+    async def concluded(self, task: Task, conclusion: str) -> None:
+        """排查任务终态：结论正文回传（排查的交付物是结论本身）。"""
+        await self._notify(
+            task,
+            f"🔍 排查任务 #{_short(task.id)} 完成：{task.title}\n\n{conclusion[:1500]}",
         )
 
     async def review_ready(

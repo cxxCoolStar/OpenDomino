@@ -10,11 +10,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # ---- LLM ----
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_api_key: str = ""
-    console_model: str = "gpt-4o-mini"
-    sandbox_model: str = "gpt-4o"
+    # ---- LLM ----（四项必填，全部由 .env 提供，代码不设默认值）
+    llm_base_url: str
+    llm_api_key: str
+    console_model: str
+    sandbox_model: str                      # ADR-004：建议配比 console_model 更强的模型
     sandbox_llm_timeout_seconds: int = 120  # 执行循环单次 LLM 调用硬超时（编码任务输出长，比 console 宽）
 
     # ---- ADR-001 入口层（钉钉）----

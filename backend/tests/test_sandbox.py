@@ -71,10 +71,11 @@ class ScriptLLM:
         return item
 
 
-def make_task(status: TaskStatus = TaskStatus.PENDING) -> Task:
+def make_task(status: TaskStatus = TaskStatus.PENDING, type_: str = "modify") -> Task:
     return Task(
         id="task12345678", title="加接口", instruction="加一个 /ping",
-        repo="demo", chat_id="c1", session_id="s1", created_by="u1", status=status,
+        repo="demo", chat_id="c1", session_id="s1", created_by="u1",
+        type=type_, status=status,
     )
 
 
@@ -317,6 +318,9 @@ class FakeReporter:
     async def review_ready(self, task, **kw):
         self.calls.append(("review_ready", task.id, kw["commits"]))
 
+    async def concluded(self, task, conclusion: str):
+        self.calls.append(("concluded", task.id, conclusion))
+
     async def finished(self, task):
         self.calls.append(("finished", task.id, task.status.value))
 
@@ -384,3 +388,60 @@ async def test_pipeline_skips_non_pending():
     tasks, pool, rep = FakeTasks(task), FakePool(), FakeReporter()
     await pipeline_mod.TaskPipeline(tasks, pool, SandboxAgent(ScriptLLM([])), rep).run_task(task.id)
     assert pool.acquired == []                             # 不重复执行
+
+
+@pytest.mark.asyncio
+async def test_pipeline_investigate_readonly_path():
+    """排查任务：不建分支、不提交；结论回传 done（原文主路径）。"""
+    task = make_task(type_="investigate")
+    tasks, pool, rep = FakeTasks(task), FakePool(), FakeReporter()
+    llm = ScriptLLM([LLMResult(text="问题出在 config.py 的超时配置", tool_calls=[])])
+
+    await pipeline_mod.TaskPipeline(tasks, pool, SandboxAgent(llm), rep).run_task(task.id)
+
+    kinds = [s[0] for s in tasks.states]
+    assert "running" not in kinds and "review" not in kinds       # 不建分支、不进评审
+    assert "finish" in kinds
+    fin = [s for s in tasks.states if s[0] == "finish"][0]
+    assert fin[1] == "done" and fin[2].get("verify_result") == "conclusion"
+    assert any(c[0] == "concluded" and "config.py" in c[2] for c in rep.calls)
+    assert pool.released == ["demo"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_investigate_no_conclusion_fails():
+    """排查任务无结论 → failed。"""
+    task = make_task(type_="investigate")
+    tasks, pool, rep = FakeTasks(task), FakePool(), FakeReporter()
+    llm = ScriptLLM([LLMResult(text="   ", tool_calls=[])])       # 空白结论
+
+    await pipeline_mod.TaskPipeline(tasks, pool, SandboxAgent(llm), rep).run_task(task.id)
+
+    assert task.status == TaskStatus.FAILED and "排查未产出结论" in task.error
+    assert any(c[0] == "finished" and c[2] == "failed" for c in rep.calls)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_modify_without_commits_fails():
+    """变更任务零提交 → failed（防空转被误判完成——E2E 95a6e5d3 教训）。"""
+    task = make_task(type_="modify")
+    tasks, pool, rep = FakeTasks(task), FakePool(), FakeReporter()
+
+    class NoCommitExecutor(FakeExecutor):
+        async def exec(self, command: str, *, timeout: float | None = None) -> str:
+            if "status --porcelain" in command:
+                return ""                                          # 无任何改动
+            return await super().exec(command, timeout=timeout)
+
+    pool2 = FakePool()
+    pool2.acquire = lambda repo: self_acq(NoCommitExecutor())     # type: ignore[method-assign]
+
+    async def self_acq(ex):
+        pool2.acquired.append("demo")
+        return ex
+
+    llm = ScriptLLM([LLMResult(text="我觉得不需要改代码", tool_calls=[])])
+    await pipeline_mod.TaskPipeline(tasks, pool2, SandboxAgent(llm), rep).run_task(task.id)
+
+    assert task.status == TaskStatus.FAILED and "未产生任何代码提交" in task.error
+    assert pool2.released == ["demo"]
