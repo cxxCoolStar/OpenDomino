@@ -35,6 +35,9 @@ OpenDomino 复刻「从钉群提问到任务交付」的团队级 Agent 基础�
 
 - `container.py` 按 repo 池化容器（容器内 clone 规避 Windows bind-mount、setsid+marker+二次 exec 击杀进程组、idle TTL 驱逐）；`git_ops.py` 分支/提交/push/log/diff 封装；
   - `tools.py` 8 个工具（list_dir/read_file/grep/write_file/apply_patch/run_command/git_diff/git_log）+ 危险命令拦截 + PAT 输出脱敏；`repo_config.py` REPO_{NAME}_* 环境变量解析与凭据收集；
+  - **文件工具 vendor hermes ShellFileOperations（MIT，`_vendor/` + `hermes_adapter.py`）**：原子写（mktemp+mv）、模糊补丁 + V4A 格式、rg→grep 降级搜索、行号分页读；`DockerExecutor` 经 adapter 提供 execute() 契约；已修 exec 单引号击穿（'''转义）与 127 分层误伤；
+  - **双任务类型（原文主路径对齐）**：ConsoleAgent 路由判定 `task.type`（investigate=排查给结论，默认 / modify=变更代码），pipeline 分流：investigate 只读路径（不建分支不提交，结论即交付物，verify_result=conclusion）；modify 交付判定为 HEAD 领先 base_ref（兼容模型自行 commit）；
+  - **E2E 已验证（scripts/e2e_sandbox.py）**：investigate 与 modify 双用例全绿——modify 真实 push `domino/task-b37c141b` 分支到 GitHub（产物 data/e2e_sandbox_result.json）；修复过程关键点：执行循环须先回填 assistant(tool_calls) 再回填 tool 消息（hermes 同构，否则上游 400）；容器 mkdir 必须先于 workdir exec；exec 错误分层（125/126/127 → ExecError）。
   - `reporter.py` 四类事件回传 + `channels/registry.py` 寻址；DingTalkChannel 新增机器人主动发消息 API（主通道，解决 session_webhook 5 分钟过期）+ webhook 兜底；
   - `main.py` 已装配：TaskService→TaskExecutor→TaskPipeline→ConsoleAgent.delegate 真实接线（「SandboxAgent 未接入」占位已移除）。
   - 测试 `tests/test_sandbox.py` 13 个（Fake 全覆盖，不依赖 Docker）；真实 Docker 集成待本地验证。
