@@ -38,3 +38,9 @@ L3 知识库做切块检索，文档结构直接决定检索质量。要点：
 
 写完新文档后可运行 `cd backend && python -m app.docs.import_docs ../docs` 验证，
 输出中的「规范违规」警告需要处理（超长拆节、迷你节合并）。
+
+## 测试策略
+
+- NEVER write unit tests after you write code.
+- Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact.
+- If you must test a system in isolation, FIRST write all the ways it could fail, THEN write the code.
