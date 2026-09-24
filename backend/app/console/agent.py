@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Awaitable, Callable
 
@@ -62,6 +63,15 @@ class ConsoleAgent:
         # 记忆确认流拦截（确定性，@ 门控；消费后不走路由器）
         if await self._confirm.try_handle(msg, session, self._reply):
             session.last_route = {"action": "memory_confirm", "ts": time.time()}
+            await self._memory.save_session(session)
+            return
+
+        # 仓库绑定指令拦截（确定性，不走 LLM；ADR-003 群仓库绑定的运行时入口）
+        repo_reply = await self._handle_repo_command(msg)
+        if repo_reply is not None:
+            await self._reply(msg.chat_id, repo_reply, msg.session_webhook)
+            session.messages.append(ChatMessage(role="assistant", text=repo_reply))
+            session.last_route = {"action": "repo_command", "ts": time.time()}
             await self._memory.save_session(session)
             return
 
@@ -161,10 +171,23 @@ class ConsoleAgent:
             return "我需要创建任务，但任务信息不完整，能再说清楚要做什么吗？"
         if self._delegate is None:
             return "任务执行功能尚未就绪（SandboxAgent 未接入）。"
+
+        # 仓库名解析：优先用模型给的 repo 名，在本群绑定的仓库里消歧（大小写不敏感）
+        repo_name = (task.repo or "").strip()
+        repo = await self._memory.resolve_repo(msg.chat_id, repo_name) if repo_name else None
+        if not repo:
+            bindings = await self._memory.list_repo_bindings(msg.chat_id)
+            if len(bindings) == 1:
+                repo = bindings[0]                    # 单绑定仓库：委派自然归属
+            elif len(bindings) > 1:
+                # 多绑定：模型未给名或给的名不匹配 → 澄清（不猜）
+                opts = "、".join(r.name for r in bindings)
+                return f"请说明要到哪个仓库执行？本群可用：{opts}。"
+            # 零绑定：沿用模型给的 repo 名直通（沙箱侧 .env 兜底解析），保持旧行为
         draft = {
             "title": task.title or msg.text[:30],
             "instruction": task.instruction,
-            "repo": task.repo,
+            "repo": repo.name if repo else repo_name,
             "type": task.type if task.type in ("investigate", "modify") else "investigate",
             "chat_id": msg.chat_id,
             "session_id": session.session_id,
@@ -172,7 +195,50 @@ class ConsoleAgent:
         }
         task_id = await self._delegate(draft)
         session.active_task_ids.append(task_id)
-        return f"已受理，任务 #{task_id[:8]}：{draft['title']}。完成后我会在群里同步。"
+        suffix = f"（仓库：{repo.name}）" if repo else ""
+        return f"已受理，任务 #{task_id[:8]}：{draft['title']}{suffix}。完成后我会在群里同步。"
+
+    # ---- 仓库绑定指令（确定性解析，ADR-003 群仓库绑定的运行时入口）----
+    _REPO_BIND_RE = re.compile(
+        r"^绑定仓库\s+[:：]?\s*(\S+)\s*[:：]?\s*(https?://\S+)(?:\s+测试命令\s*[:：]?\s*(.+))?$",
+        re.IGNORECASE,
+    )
+    _REPO_UNBIND_RE = re.compile(r"^解绑仓库\s+[:：]?\s*(\S+)$")
+    _REPO_LIST_RE = re.compile(r"^查看仓库$|^仓库列表$")
+
+    async def _handle_repo_command(self, msg: UnifiedMessage) -> str | None:
+        """命中绑定/解绑/查看指令返回回复文本；否则返回 None 走正常管线。"""
+        text = msg.text.strip()
+
+        m = self._REPO_BIND_RE.match(text)
+        if m:
+            name, url, test_cmd = m.group(1), m.group(2), (m.group(3) or "").strip()
+            repo = await self._memory.bind_repo(
+                msg.chat_id, name, url, test_cmd=test_cmd, bound_by=msg.user_id
+            )
+            log.info("repo bound: chat=%s repo=%s(%s) by=%s", msg.chat_id, repo.name, repo.repo_id, msg.user_id)
+            cmd_part = f"\n测试命令：{test_cmd}" if test_cmd else ""
+            return (
+                f"🔗 已绑定仓库 [{repo.name}] → {url}{cmd_part}\n"
+                f"现在可以说「帮我到 {repo.name} 仓库排查/修改…」了。"
+            )
+
+        m = self._REPO_UNBIND_RE.match(text)
+        if m:
+            name = m.group(1)
+            ok = await self._memory.unbind_repo(msg.chat_id, name)
+            if not ok:
+                return f"本群没有绑定名为 [{name}] 的仓库。"
+            log.info("repo unbound: chat=%s repo=%s by=%s", msg.chat_id, name, msg.user_id)
+            return f"已解绑仓库 [{name}]（仓库档案保留，可随时重新绑定）。"
+
+        if self._REPO_LIST_RE.match(text):
+            repos = await self._memory.list_repo_bindings(msg.chat_id)
+            if not repos:
+                return "本群还没有绑定仓库。用「绑定仓库 名字: https://github.com/…」添加。"
+            lines = [f"- **{r.name}**：{r.url}" for r in repos]
+            return "本群已绑定仓库：\n" + "\n".join(lines)
+        return None
 
     # 待处理状态超时被动清理（下一条消息到达时调用）
     @staticmethod

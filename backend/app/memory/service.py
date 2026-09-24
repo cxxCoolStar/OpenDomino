@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import settings
+from app.memory.repo_types import Repo, new_repo_id
 
 log = logging.getLogger(__name__)
 from app.memory.embedding import (
@@ -72,6 +73,34 @@ class MemoryRow(Base):
     created_by: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[float] = mapped_column(Float, default=0.0)
     updated_at: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class RepoRow(Base):
+    """仓库实体（M:N 的 M 端）：全局唯一，档案只存一份。凭据不在此表（走部署环境）。"""
+
+    __tablename__ = "repos"
+
+    repo_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    url: Mapped[str] = mapped_column(String(512), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    default_test_cmd: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class GroupRepoBindingRow(Base):
+    """群-仓库关系（M:N 的 N 端）：(chat_id, repo_id) 唯一；群级 test_cmd 可覆盖实体默认值。"""
+
+    __tablename__ = "group_repo_bindings"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    chat_id: Mapped[str] = mapped_column(String(128), index=True)
+    repo_id: Mapped[str] = mapped_column(String(64), index=True)
+    test_cmd_override: Mapped[str] = mapped_column(Text, default="")
+    bound_by: Mapped[str] = mapped_column(String(128), default="")
+    bound_at: Mapped[float] = mapped_column(Float, default=0.0)
+
 
 def _parse_keywords(keywords_json: str) -> list[str]:
     try:
@@ -314,6 +343,95 @@ class SQLiteMemoryService:
             except Exception:  # noqa: BLE001
                 log.warning("chroma delete failed for %s", memory_id)
         return True
+
+    # ---- 仓库注册与群绑定（M:N，ADR-003 群仓库绑定的 L2 落地）----
+
+    async def bind_repo(
+        self, chat_id: str, name: str, url: str, *,
+        description: str = "", test_cmd: str = "", bound_by: str = "",
+    ) -> Repo:
+        """绑定即注册：仓库不存在则创建实体；(chat_id, repo_id) 唯一，重复绑定幂等返回。"""
+        name = name.strip()
+        async with self._session() as s:
+            row = (await s.execute(select(RepoRow).where(RepoRow.name == name))).scalar_one_or_none()
+            if row is None:
+                row = RepoRow(
+                    repo_id=new_repo_id(), name=name, url=url,
+                    description=description, default_test_cmd=test_cmd,
+                    created_by=bound_by, created_at=time.time(),
+                )
+                s.add(row)
+                await s.flush()
+            binding = (
+                await s.execute(
+                    select(GroupRepoBindingRow).where(
+                        GroupRepoBindingRow.chat_id == chat_id,
+                        GroupRepoBindingRow.repo_id == row.repo_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if binding is None:
+                s.add(GroupRepoBindingRow(
+                    id=uuid.uuid4().hex, chat_id=chat_id, repo_id=row.repo_id,
+                    test_cmd_override=test_cmd, bound_by=bound_by, bound_at=time.time(),
+                ))
+            else:  # 幂等：重复绑定刷新覆盖命令
+                binding.test_cmd_override = test_cmd or binding.test_cmd_override
+            await s.commit()
+            return Repo(
+                repo_id=row.repo_id, name=row.name, url=row.url,
+                description=row.description, default_test_cmd=row.default_test_cmd,
+                created_by=row.created_by, created_at=row.created_at,
+            )
+
+    async def unbind_repo(self, chat_id: str, name: str) -> bool:
+        """解绑：只删关系不删仓库实体。返回是否发生了解绑。"""
+        async with self._session() as s:
+            row = (await s.execute(select(RepoRow).where(RepoRow.name == name.strip()))).scalar_one_or_none()
+            if row is None:
+                return False
+            binding = (
+                await s.execute(
+                    select(GroupRepoBindingRow).where(
+                        GroupRepoBindingRow.chat_id == chat_id,
+                        GroupRepoBindingRow.repo_id == row.repo_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if binding is None:
+                return False
+            await s.delete(binding)
+            await s.commit()
+            return True
+
+    async def list_repo_bindings(self, chat_id: str) -> list[Repo]:
+        """本群绑定的全部仓库（按绑定时间序）。"""
+        async with self._session() as s:
+            rows = (
+                await s.execute(
+                    select(RepoRow)
+                    .join(GroupRepoBindingRow, GroupRepoBindingRow.repo_id == RepoRow.repo_id)
+                    .where(GroupRepoBindingRow.chat_id == chat_id)
+                    .order_by(GroupRepoBindingRow.bound_at.asc())
+                )
+            ).scalars().all()
+            return [
+                Repo(
+                    repo_id=r.repo_id, name=r.name, url=r.url,
+                    description=r.description, default_test_cmd=r.default_test_cmd,
+                    created_by=r.created_by, created_at=r.created_at,
+                )
+                for r in rows
+            ]
+
+    async def resolve_repo(self, chat_id: str, name: str) -> Repo | None:
+        """委派解析：本群是否绑定了该名字的仓库（含大小写不敏感匹配）。"""
+        name = name.strip()
+        bindings = await self.list_repo_bindings(chat_id)
+        for repo in bindings:
+            if repo.name.lower() == name.lower():
+                return repo
+        return None
 
     # ---- L3 ----
 

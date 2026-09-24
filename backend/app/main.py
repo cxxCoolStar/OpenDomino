@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
     pool = ContainerPool()
     pool.start_sweeper()
     sandbox_agent = SandboxAgent(OpenAIChatClient())
-    pipeline = TaskPipeline(tasks, pool, sandbox_agent, reporter)
+    pipeline = TaskPipeline(tasks, pool, sandbox_agent, reporter, memory=memory)
     executor = TaskExecutor(pipeline.run_task)
 
     # 重启恢复：pending 续跑，running/review 标失败（详细设计 §2.3）

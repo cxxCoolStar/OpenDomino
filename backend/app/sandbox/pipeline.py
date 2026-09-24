@@ -29,11 +29,13 @@ class TaskPipeline:
         pool: ContainerPool,
         agent: SandboxAgent,
         reporter: TaskReporter,
+        memory=None,
     ) -> None:
         self.tasks = tasks
         self.pool = pool
         self.agent = agent
         self.reporter = reporter
+        self._memory = memory      # 可选：L2 绑定解析（M:N 仓库解析主路径）
 
     async def run_task(self, task_id: str) -> None:
         task = await self.tasks.get(task_id)
@@ -49,7 +51,7 @@ class TaskPipeline:
 
         executor = None
         try:
-            executor = await self.pool.acquire(task.repo)
+            executor = await self.pool.acquire(task.repo, chat_id=task.chat_id, memory=self._memory)
 
             # 工作区重置到基线（首次为当前 HEAD；恢复任务用库里的 base_ref）
             base_ref = await self.pool.reset_workspace(task.repo, executor, task.base_ref)

@@ -298,7 +298,7 @@ class FakePool:
         self.acquired: list[str] = []
         self.released: list[str] = []
 
-    async def acquire(self, repo):
+    async def acquire(self, repo, *, chat_id: str = "", memory=None):
         self.acquired.append(repo)
         return FakeExecutor()
 
@@ -438,7 +438,7 @@ async def test_pipeline_modify_without_commits_fails():
             return await super().exec(command, timeout=timeout)
 
     pool2 = FakePool()
-    pool2.acquire = lambda repo: self_acq(NoCommitExecutor())     # type: ignore[method-assign]
+    pool2.acquire = lambda repo, *, chat_id="", memory=None: self_acq(NoCommitExecutor())  # type: ignore[method-assign]
 
     async def self_acq(ex):
         pool2.acquired.append("demo")

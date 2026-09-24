@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass
 
 from app.config import settings
-from app.sandbox.repo_config import RepoExecutionConfig, get_repo_config
+from app.sandbox.repo_config import RepoExecutionConfig, resolve_repo_config
 
 log = logging.getLogger(__name__)
 
@@ -201,11 +201,17 @@ class ContainerPool:
 
     # ---- 获取/归还 ----
 
-    async def acquire(self, repo: str) -> DockerExecutor:
-        """取该仓库的执行器；容器不存在则创建并 clone。"""
-        cfg = get_repo_config(repo)
+    async def acquire(self, repo: str, *, chat_id: str = "", memory=None) -> DockerExecutor:
+        """取该仓库的执行器；容器不存在则创建并 clone。
+
+        池化键 = repo 名（同仓库跨群共享容器池——M:N 绑定下 clone 只此一份）。
+        配置解析：L2 repo_bindings 优先，.env REPO_* 兜底。
+        """
+        cfg = await resolve_repo_config(repo, chat_id=chat_id, memory=memory)
         if cfg is None or not cfg.url:
-            raise ContainerError(f"仓库 {repo} 未配置 REPO_{repo.upper()}_URL，无法执行任务")
+            raise ContainerError(
+                f"仓库 {repo} 未注册：请在群里发「绑定仓库 {repo}: <仓库URL>」完成绑定"
+            )
 
         async with self._lock:
             entry = self._pool.get(repo)

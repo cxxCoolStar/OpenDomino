@@ -57,6 +57,10 @@ class ContextAssembler:
         # 不可裁剪段
         state = self._state_section(session)
         chat = self._chat_section(session)
+        repo_section = await self._repo_section(session.chat_id)
+        if repo_section:
+            # 仓库列表与任务路由直接相关，作为不可裁剪段紧跟会话状态
+            state = (state + "\n\n" + repo_section) if state else repo_section
 
         # 可裁剪段（按优先级从剩余预算里分配）
         summary = self._summary_section(session)
@@ -106,15 +110,19 @@ class ContextAssembler:
         if session.active_task_ids:
             parts.append(f"[进行中任务] {', '.join(session.active_task_ids)}")
 
-        repo = get_repo(session.chat_id)
-        registry = parse_repo_registry()
-        if repo:
-            parts.append(f"[群关联仓库] 默认仓库：{repo}（{registry.get(repo, '')}）")
-        elif registry:
-            opts = "；".join(f"{n}({d})" for n, d in registry.items())
-            parts.append(f"[可选仓库] {opts}")
-
         return "[会话状态]\n" + "\n".join(parts) if parts else ""
+
+    async def _repo_section(self, chat_id: str) -> str:
+        """本群可用仓库列表（L2 repo_bindings，M:N）。"""
+        try:
+            repos = await self._memory.list_repo_bindings(chat_id)
+        except Exception:  # noqa: BLE001 —— 绑定查询失败不阻塞装配
+            return ""
+        if not repos:
+            return ""
+        lines = [f"- {r.name}：{r.url}" + (f"（{r.description}）" if r.description else "")
+                 for r in repos]
+        return "[本群可用仓库]\n" + "\n".join(lines)
 
     # ---- 群聊上下文（不可裁剪）----
 

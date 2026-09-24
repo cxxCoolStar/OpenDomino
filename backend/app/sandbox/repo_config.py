@@ -1,7 +1,8 @@
-"""仓库执行配置（ADR-004 详细设计 §5）：REPO_{NAME}_* 环境变量解析与凭据收集。
+"""仓库执行配置解析（ADR-004 详细设计 §5 + M:N 绑定改造）。
 
-沙箱侧不维护「群→仓库」绑定（那是 ADR-003 console 侧的事），
-只按任务里的仓库名查这里的执行配置：URL、镜像、依赖安装命令、测试命令。
+解析优先级：L2 repo_bindings（chat_id + repo_name 消歧，主路径）
+          → .env REPO_{NAME}_*（过渡兼容兜底，计划废弃）。
+token 永不出自 L2/数据库：REPO_{NAME}_TOKEN → GITHUB_TOKEN（部署环境）。
 """
 from __future__ import annotations
 
@@ -81,3 +82,36 @@ def collect_secrets() -> list[str]:
     if gt:
         secrets.append(gt)
     return secrets
+
+
+async def resolve_repo_config(repo_name: str, chat_id: str = "", memory=None) -> RepoExecutionConfig | None:
+    """解析仓库执行配置：L2 绑定优先，.env 兜底。解析失败返回 None。"""
+    name = (repo_name or "").strip()
+    if not name:
+        return None
+
+    # 1) L2 绑定（M:N 主路径）
+    if memory is not None and chat_id:
+        try:
+            repo = await memory.resolve_repo(chat_id, name)
+        except Exception:  # noqa: BLE001 —— 绑定查询失败不阻塞，走 .env 兜底
+            repo = None
+            log.exception("resolve_repo from L2 failed, fallback to env")
+        if repo is not None:
+            return RepoExecutionConfig(
+                name=repo.name,
+                url=repo.url,
+                test_cmd=repo.default_test_cmd,
+                token=_env_token_for(repo.name),
+            )
+
+    # 2) .env REPO_{NAME}_* 兜底（过渡期兼容）
+    return parse_repo_execution_configs().get(name.lower())
+
+
+def _env_token_for(name: str) -> str:
+    """token 来源：REPO_{NAME}_TOKEN（按仓覆盖）→ GITHUB_TOKEN（全局，github.com 才适用）。"""
+    specific = os.environ.get(f"REPO_{name.upper()}_TOKEN", "")
+    if specific:
+        return specific
+    return os.environ.get("GITHUB_TOKEN", "")
