@@ -190,10 +190,10 @@ async def _h_write_file(args: dict, ctx: ToolContext) -> str:
 
 
 async def _h_apply_patch(args: dict, ctx: ToolContext) -> str:
-    # patch 经 stdin 传入，避免 argv 长度与引号转义问题
-    cmd = f"patch -p1 --forward < /tmp/.domino_patch_{ctx.task_id or 'x'}.diff"
-    await ctx.executor.write_file(f"/tmp/.domino_patch_{ctx.task_id or 'x'}.diff", args["diff"])
-    return _wrap(await ctx.executor.exec(cmd, cwd=args["path"] and "."))
+    # patch 文件写入 /tmp（stdin 文件管道，避免 argv 长度与引号转义问题），工作区内应用
+    diff_path = f"/tmp/.domino_patch_{ctx.task_id or 'x'}.diff"
+    await ctx.executor.write_file(diff_path, args["diff"])
+    return _wrap(await ctx.executor.exec(f"patch -p1 --forward < {diff_path}"))
 
 
 async def _h_run_command(args: dict, ctx: ToolContext) -> str:

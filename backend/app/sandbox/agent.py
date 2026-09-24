@@ -131,6 +131,18 @@ class SandboxAgent:
                     break
 
                 all_failed = True
+                # 先回填 assistant(tool_calls) 消息——role=tool 必须紧跟在带 tool_calls 的
+                # assistant 消息之后，否则消息序列非法（OpenAI 协议要求，缺失时上游 400）
+                messages.append({
+                    "role": "assistant",
+                    "content": llm_out.text or None,
+                    "tool_calls": [
+                        {"id": tc.id, "type": "function",
+                         "function": {"name": tc.name,
+                                      "arguments": json.dumps(tc.args, ensure_ascii=False)}}
+                        for tc in llm_out.tool_calls
+                    ],
+                })
                 for tc in llm_out.tool_calls:
                     output = await dispatch_tool(tc.name, tc.args, ctx)
                     messages.append(

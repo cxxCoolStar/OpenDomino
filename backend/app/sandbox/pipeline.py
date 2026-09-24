@@ -83,9 +83,11 @@ class TaskPipeline:
                 await self.reporter.finished(task)
                 return
 
-            # 提交与推送（空改动=模型未产生提交，拒绝交付——防"空转被误判完成"）
-            sha = await git_ops.commit(executor, f"domino: {task.title}")
-            if not sha:
+            # 提交与推送：模型可能已自行 commit（工作区 clean）——所以"是否产生提交"
+            # 以 HEAD 是否领先 base_ref 为准；仍有未提交改动时补一次收尾提交。
+            sha = await git_ops.commit(executor, f"domino: {task.title}")   # 无改动时返回 None（已提交场景）
+            commits = await git_ops.commit_log(executor, base_ref)
+            if not commits:
                 error = "模型未产生任何代码提交，任务无法交付"
                 log.warning("modify task without commits: %s", task_id)
                 await self.tasks.finish(task_id, TaskStatus.FAILED, error=error)
@@ -93,7 +95,6 @@ class TaskPipeline:
                 task.error = error
                 await self.reporter.finished(task)
                 return
-            commits = await git_ops.commit_log(executor, base_ref)
             await git_ops.push(executor, branch)
             diff_stat = await git_ops.diff_stat(executor, base_ref)
             full_diff = await git_ops.full_diff(executor, base_ref)

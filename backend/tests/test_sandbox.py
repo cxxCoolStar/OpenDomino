@@ -167,7 +167,8 @@ async def test_agent_natural_completion():
     ])
     r = await SandboxAgent(llm).run(make_task(), ToolContext(executor=FakeExecutor()))
     assert r.status == "done" and r.summary == "全部完成" and r.steps_used == 1
-    assert llm.calls[0] == (2, True) and llm.calls[1] == (3, True)   # 2 条初始 + 1 条 tool 回填
+    # 轮1: system+user；轮2: +assistant(tool_calls)+tool（hermes 同构：assistant 先于 tool 回填）
+    assert llm.calls[0] == (2, True) and llm.calls[1] == (4, True)
 
 
 @pytest.mark.asyncio
@@ -423,14 +424,17 @@ async def test_pipeline_investigate_no_conclusion_fails():
 
 @pytest.mark.asyncio
 async def test_pipeline_modify_without_commits_fails():
-    """变更任务零提交 → failed（防空转被误判完成——E2E 95a6e5d3 教训）。"""
+    """变更任务 HEAD 未领先 base_ref → failed（防空转被误判完成——E2E 95a6e5d3 教训）。"""
     task = make_task(type_="modify")
     tasks, pool, rep = FakeTasks(task), FakePool(), FakeReporter()
 
     class NoCommitExecutor(FakeExecutor):
         async def exec(self, command: str, *, timeout: float | None = None) -> str:
+            # status 空（工作区 clean）+ git log 无领先提交 → 双重确认零提交
             if "status --porcelain" in command:
-                return ""                                          # 无任何改动
+                return ""
+            if "git log" in command:
+                return ""
             return await super().exec(command, timeout=timeout)
 
     pool2 = FakePool()

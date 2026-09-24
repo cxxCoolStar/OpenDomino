@@ -127,7 +127,8 @@ async def main() -> int:
         async def started(self, task):
             events_log.append(("started", task.status.value, task.branch_name))
             kind = "排查" if task.type == "investigate" else "变更"
-            print(f"  [reporter] {kind}任务开始 branch={task.branch_name or '(无，排查任务)'}")
+            branch = task.branch_name or "(无分支)" if task.type == "investigate" else task.branch_name
+            print(f"  [reporter] {kind}任务开始 branch={branch}")
 
         async def concluded(self, task, conclusion: str):
             events_log.append(("concluded", task.status.value, conclusion[:80]))

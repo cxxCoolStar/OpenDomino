@@ -111,9 +111,11 @@ class DockerExecutor:
     async def read_file(self, path: str) -> str:
         if path.endswith((".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip", ".tar", ".gz", ".whl", ".pyc")):
             raise UnicodeDecodeError("utf-8", b"", 0, 1, "binary file refused")
+        # 二进制嗅探用 grep -qI（GNU grep 内置，镜像里无需 file 命令）：
+        # -I 把二进制文件当无匹配处理 → 检出二进制时 exit 1
         code = (
             f"test -f {_q(path)} || exit 3; "
-            f"file -b --mime-encoding {_q(path)} | grep -qv binary || exit 2; "
+            f"grep -qI . {_q(path)} || exit 2; "
             f"cat {_q(path)}"
         )
         out = await self.exec(code, timeout=30)
