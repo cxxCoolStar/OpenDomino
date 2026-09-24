@@ -102,7 +102,7 @@ def _session_from_row(row: SessionRow) -> SessionContext:
 
 
 class SQLiteMemoryService:
-    """默认实现。L1 全量实现；L2 草稿/确认落库 + 三级召回；L3 暂空。"""
+    """默认实现。L1 全量实现；L2 草稿/确认落库 + 分级召回；L3 委托 KnowledgeBase（FTS5+向量双路）。"""
 
     def __init__(self, db_url: str | None = None, embedding: EmbeddingClient | None = None) -> None:
         resolved_url = db_url or settings.memory_db_url

@@ -20,7 +20,7 @@ OpenDomino 复刻「从钉群提问到任务交付」的团队级 Agent 基础�
 ### 记忆与知识库
 
 - **L2 KBase 基础**：草稿/确认记录可落库，普通召回只返回 confirmed 条目；当前召回是简单关键词匹配，不是 ADR 目标中的向量检索。
-- **L3 知识库**：接口已定义，当前返回空结果，尚未接文档导入、FTS5 或 ChromaDB。
+- **L3 知识库**：已落地（`app/docs/knowledge.py`）——规范契约切块 + FTS5 中文 2-gram 切词 + 向量双路检索 + RRF 融合；文档经 `python -m app.docs.import_docs ../docs` 导入。
 ### Agent 与工具
 
 - **ConsoleAgent**：单次结构化 JSON 路由；answer / clarify / delegate 三种动作；同群串行锁；pending 澄清随 Session 持久化；LLM JSON 解析失败重试一次后降级回复。
