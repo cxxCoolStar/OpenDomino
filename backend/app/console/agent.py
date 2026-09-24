@@ -200,7 +200,7 @@ class ConsoleAgent:
 
     # ---- 仓库绑定指令（确定性解析，ADR-003 群仓库绑定的运行时入口）----
     _REPO_BIND_RE = re.compile(
-        r"^绑定仓库\s+[:：]?\s*(\S+)\s*[:：]?\s*(https?://\S+)(?:\s+测试命令\s*[:：]?\s*(.+))?$",
+        r"^绑定仓库\s+[:：]?\s*([^\s:：]+)\s*[:：]\s*(https?://\S+)(?:\s+测试命令\s*[:：]?\s*(.+))?$",
         re.IGNORECASE,
     )
     _REPO_UNBIND_RE = re.compile(r"^解绑仓库\s+[:：]?\s*(\S+)$")
