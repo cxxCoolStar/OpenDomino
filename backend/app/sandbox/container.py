@@ -138,6 +138,23 @@ def _q(path: str) -> str:
     return "'" + path.replace("'", "'\\''") + "'"
 
 
+async def _ensure_git(executor: "DockerExecutor") -> None:
+    """容器内 git 缺失时现场安装（按包管理器探测；已装则零开销跳过）。"""
+    probe = await executor.exec("command -v git", timeout=30)
+    if probe.strip():
+        return
+    log.info("git missing in container, installing...")
+    out = await executor.exec(
+        "(apt-get update && apt-get install -y git) || "
+        "(apk add --no-cache git) || "
+        "(yum install -y git)",
+        timeout=600,
+    )
+    check = await executor.exec("command -v git", timeout=30)
+    if not check.strip():
+        raise ContainerError(f"容器内 git 安装失败: {out[-500:]}")
+
+
 class ContainerPool:
     """按仓库池化容器。entry lifecycle：懒创建 → 复用 → idle 驱逐。"""
 
@@ -201,8 +218,10 @@ class ContainerPool:
         container = await loop.run_in_executor(None, _run)
         entry = _PoolEntry(container=container, repo_config=cfg, last_used=time.time())
 
-        # clone（容器内，Linux 原生 I/O）；凭据织入 URL，不落盘、不进镜像
+        # clone（容器内，Linux 原生 I/O）；凭据织入 URL，不落盘、不进镜像。
+        # 基础镜像（python:3.12-slim 等）可能不带 git：缺失则现场安装（幂等，容器复用时跳过）
         executor = DockerExecutor(entry, cfg.name)
+        await _ensure_git(executor)
         await executor.exec(
             f"git clone {_q(cfg.clone_url)} {_WORKDIR} 2>&1",
             timeout=300,

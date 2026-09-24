@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     console_knowledge_limit: int = 8
     console_max_context_chars: int = 12000
     console_clarify_ttl_minutes: int = 30
-    console_llm_timeout_seconds: int = 25   # 单次 LLM 调用硬超时（SDK 重试已禁用），快速失败交给上层
+    console_llm_timeout_seconds: int = 60   # 单次 LLM 调用硬超时（SDK 重试已禁用）；glm 高峰期 25s 不够，60s 保群聊稳定性
     repo_registry: str = ""                 # name=url|desc;name2=url2|desc2
 
     # ---- ADR-002 记忆层 ----
