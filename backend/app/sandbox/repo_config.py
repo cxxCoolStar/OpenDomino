@@ -33,10 +33,16 @@ class RepoExecutionConfig:
         return self.url.replace("https://", f"https://x-access-token:{self.token}@", 1)
 
 
+def _global_github_token() -> str:
+    """全局 GitHub token（GITHUB_TOKEN）。REPO_{NAME}_TOKEN 未配置时的兜底凭据。"""
+    return os.environ.get("GITHUB_TOKEN", "")
+
+
 def parse_repo_execution_configs() -> dict[str, RepoExecutionConfig]:
     """解析 REPO_{NAME}_URL/_IMAGE/_SETUP_CMD/_TEST_CMD/_TOKEN。
 
     与 console/context.py 的 parse_repo_registry 同风格：宽容解析，坏条目跳过并记日志。
+    token 缺省回退 GITHUB_TOKEN（全局凭据，适配单 token 管多仓库的场景）。
     """
     out: dict[str, RepoExecutionConfig] = {}
     for key, value in os.environ.items():
@@ -55,7 +61,10 @@ def parse_repo_execution_configs() -> dict[str, RepoExecutionConfig]:
             cfg.test_cmd = value
         elif field_name == "TOKEN":
             cfg.token = value
+    fallback = _global_github_token()
     for name, cfg in out.items():
+        if not cfg.token and fallback and "github.com" in cfg.url:
+            cfg.token = fallback
         if not cfg.url:
             log.warning("repo %s has TOKEN/IMAGE but no REPO_%s_URL", name, name.upper())
     return out
@@ -67,4 +76,8 @@ def get_repo_config(repo: str) -> RepoExecutionConfig | None:
 
 def collect_secrets() -> list[str]:
     """所有需要从工具输出中脱敏的字符串（token 只此一用，不进 prompt）。"""
-    return [c.token for c in parse_repo_execution_configs().values() if c.token]
+    secrets = [c.token for c in parse_repo_execution_configs().values() if c.token]
+    gt = _global_github_token()
+    if gt:
+        secrets.append(gt)
+    return secrets
