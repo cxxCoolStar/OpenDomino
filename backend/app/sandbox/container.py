@@ -172,10 +172,18 @@ async def _ensure_git(executor: "DockerExecutor") -> None:
     if "MISSING" not in probe:
         return
     log.info("git missing in container, installing...")
+    # DEBIAN_FRONTEND=noninteractive：apt 安装 debconf 需要 tty，缺它会在非交互 exec 下失败；
+    # 三个包管理器分支各自用 `&& ... || true` 链收束为 0/1（apt 失败时 fallback 到 apk/yum），
+    # 且不再让"apk/yum not found"的 127 掩盖真实失败码
     out = await executor.exec(
-        "(apt-get update && apt-get install -y git) || "
-        "(apk add --no-cache git) || "
-        "(yum install -y git)",
+        "export DEBIAN_FRONTEND=noninteractive; "
+        "if command -v apt-get >/dev/null 2>&1; then "
+        "  apt-get update -qq && apt-get install -y -qq git; "
+        "elif command -v apk >/dev/null 2>&1; then "
+        "  apk add --no-cache git; "
+        "elif command -v yum >/dev/null 2>&1; then "
+        "  yum install -y git; "
+        "else echo 'no known package manager'; exit 1; fi",
         timeout=600,
     )
     check = await executor.exec("command -v git || echo MISSING", timeout=30)
