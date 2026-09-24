@@ -56,8 +56,11 @@ class DockerExecutor:
         limit = settings.sandbox_command_timeout_seconds if timeout is None else timeout
         loop = asyncio.get_running_loop()
         marker = f"/tmp/.domino-pgid-{uuid.uuid4().hex[:12]}"
+        # 命令里的单引号会击穿外层 sh -c '...' 包裹（hermes 原子写脚本的 trap '...' 正是此形态），
+        # 统一转义为 '\''（POSIX sh 标准写法：结束引号+转义引号+重开引号）
+        escaped = command.replace("'", "'\\''")
         wrapped = (
-            f"setsid sh -c 'echo $$ > {marker}; {command}; rc=$?; rm -f {marker}; exit $rc'"
+            f"setsid sh -c 'echo $$ > {marker}; {escaped}; rc=$?; rm -f {marker}; exit $rc'"
         )
         holder = self._entry.container
         wd = workdir or _WORKDIR

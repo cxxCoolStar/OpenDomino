@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -164,6 +165,27 @@ _DANGEROUS = ("rm -rf /", "mkfs", "dd if=", ":(){:|:&};:", "> /dev/sd")
 
 
 # ---- handler 实现（全部经 ctx.executor 执行）----
+# read_file / write_file / apply_patch / grep 四个 handler 接入 hermes
+# ShellFileOperations（vendor，见 _vendor/ + hermes_adapter.py）：
+# 原子写、模糊补丁、rg→grep 降级搜索、行号分页读，全部是她修过几百个 issue 的实现。
+
+from app.sandbox.hermes_adapter import HermesEnvAdapter  # noqa: E402
+from app.sandbox._vendor import file_operations as _hfo  # noqa: E402
+
+_ops_cache: dict[int, Any] = {}
+
+
+def _get_file_ops(ctx: ToolContext):
+    """每个 executor 复用一个 ShellFileOperations（内含 _has_command 缓存）。"""
+    key = id(ctx.executor)
+    if key not in _ops_cache:
+        _ops_cache[key] = _hfo.ShellFileOperations(HermesEnvAdapter(ctx.executor), cwd="/workspace")
+    return _ops_cache[key]
+
+
+def _tool_name(fn) -> str:
+    """vendor 侧报错时的调用方工具名（用于错误文案）。"""
+    return fn.__name__.replace("_", " ")
 
 
 async def _h_list_dir(args: dict, ctx: ToolContext) -> str:
@@ -171,29 +193,41 @@ async def _h_list_dir(args: dict, ctx: ToolContext) -> str:
 
 
 async def _h_read_file(args: dict, ctx: ToolContext) -> str:
-    try:
-        return _wrap(await ctx.executor.read_file(args["path"]))
-    except FileNotFoundError:
-        return _err(f"文件不存在: {args['path']}")
-    except UnicodeDecodeError:
-        return _err(f"二进制文件，拒绝读取: {args['path']}")
+    ops = _get_file_ops(ctx)
+    r = await asyncio.to_thread(ops.read_file, args["path"])
+    if r.error:
+        return _err(r.error)
+    return _wrap(r.content)
 
 
 async def _h_grep(args: dict, ctx: ToolContext) -> str:
-    cmd = f"grep -rn --include={args.get('glob', '*')} -E {args['pattern']!r} ."
-    return _wrap(await ctx.executor.exec(cmd))
+    ops = _get_file_ops(ctx)
+    glob = args.get("glob") or None
+    r = await asyncio.to_thread(
+        ops.search, args["pattern"], path="/workspace", file_glob=glob, limit=50
+    )
+    if r.error:
+        return _err(r.error)
+    lines = [f"{m.path}:{m.line_number}:{m.content}" for m in r.matches]
+    if r.total_count > len(lines):
+        lines.append(f"…共 {r.total_count} 个匹配（已截断）")
+    return _wrap("\n".join(lines) or "（无匹配）")
 
 
 async def _h_write_file(args: dict, ctx: ToolContext) -> str:
-    await ctx.executor.write_file(args["path"], args["content"])
+    ops = _get_file_ops(ctx)
+    r = await asyncio.to_thread(ops.write_file, args["path"], args["content"])
+    if r.error:
+        return _err(r.error)
     return _wrap(f"ok: wrote {args['path']} ({len(args['content'])} chars)")
 
 
 async def _h_apply_patch(args: dict, ctx: ToolContext) -> str:
-    # patch 文件写入 /tmp（stdin 文件管道，避免 argv 长度与引号转义问题），工作区内应用
-    diff_path = f"/tmp/.domino_patch_{ctx.task_id or 'x'}.diff"
-    await ctx.executor.write_file(diff_path, args["diff"])
-    return _wrap(await ctx.executor.exec(f"patch -p1 --forward < {diff_path}"))
+    ops = _get_file_ops(ctx)
+    r = await asyncio.to_thread(ops.patch_v4a, args["diff"])
+    if r.error:
+        return _err(r.error)
+    return _wrap(f"ok: applied patch to {args['path']}")
 
 
 async def _h_run_command(args: dict, ctx: ToolContext) -> str:
