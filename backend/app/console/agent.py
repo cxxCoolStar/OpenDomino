@@ -13,8 +13,8 @@ from app.console.context import ContextAssembler
 from app.console.memory_confirm import MemoryConfirmHandler
 from app.console.router import Router
 from app.console.router_types import Action, PendingResolution
+from app.memory.service import SQLiteMemoryService
 from app.memory.types import ChatMessage, MemoryService, PendingState
-
 log = logging.getLogger(__name__)
 
 ReplyFn = Callable[[str, str, str], Awaitable[None]]    # (chat_id, text, session_webhook)
@@ -83,6 +83,15 @@ class ConsoleAgent:
             )
         )
 
+        # 旁听消息注入装配器（ADR-008 段 2 合并时间线；窗口外部分留 L2 存而不检索）
+        if isinstance(self._memory, SQLiteMemoryService):
+            observed = await self._memory.load_observed(
+                msg.chat_id,
+                since=time.time() - settings.feishu_observe_window_hours * 3600,
+                limit=settings.console_context_window,
+            )
+            observed = [m for m in observed if m.message_id != msg.message_id]
+            self._assembler.prime_observed(msg.chat_id, observed)
         # 滚动压缩（Phase A）：溢出消息在路由前压进摘要
         from app.console.compaction import maybe_compact
         await maybe_compact(session, self._router.llm)

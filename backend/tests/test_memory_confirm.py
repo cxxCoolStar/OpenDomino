@@ -189,8 +189,8 @@ async def test_remember_direct_save(mem, replies):
 @pytest.mark.asyncio
 async def test_free_chat_requires_at_for_all_memory_ops(mem, replies, monkeypatch):
     """免 @ 群里，记忆操作（含 /沉淀 指令与确认词）都必须 @ 机器人。"""
-    monkeypatch.setattr(settings, "dingtalk_require_mention", True)
-    monkeypatch.setattr(settings, "dingtalk_free_response_chats", "c1")
+    monkeypatch.setattr(settings, "feishu_require_mention", True)
+    monkeypatch.setattr(settings, "feishu_free_response_chats", "c1")
     agent = _agent(mem, replies)
 
     # 未 @ 的 /沉淀 被放行当普通消息，不建草稿

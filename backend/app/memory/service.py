@@ -15,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 from sqlalchemy.engine import make_url
-from sqlalchemy import Float, String, Text, select
+from sqlalchemy import Float, String, Text, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -100,6 +100,22 @@ class GroupRepoBindingRow(Base):
     test_cmd_override: Mapped[str] = mapped_column(Text, default="")
     bound_by: Mapped[str] = mapped_column(String(128), default="")
     bound_at: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class ObservedMessageRow(Base):
+    """旁听消息（ADR-008）：非 @ 群消息与回拉历史，全量落库、存而不检索。
+
+    message_id 主键天然幂等——通道去重集合重启丢失后，回拉/重放靠 INSERT OR REPLACE 兜底。
+    """
+
+    __tablename__ = "observed_messages"
+
+    message_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    chat_id: Mapped[str] = mapped_column(String(128), index=True)
+    user_id: Mapped[str] = mapped_column(String(128), default="")
+    user_name: Mapped[str] = mapped_column(String(128), default="")
+    text: Mapped[str] = mapped_column(Text, default="")
+    timestamp: Mapped[float] = mapped_column(Float, default=0.0, index=True)
 
 
 def _parse_keywords(keywords_json: str) -> list[str]:
@@ -432,6 +448,77 @@ class SQLiteMemoryService:
             if repo.name.lower() == name.lower():
                 return repo
         return None
+
+    # ---- 旁听缓冲（ADR-008）----
+
+    async def save_observed(self, chat_id: str, messages: list[ChatMessage]) -> int:
+        """批量落旁听消息，按 message_id 幂等（已存在的跳过）。返回新增条数。"""
+        added = 0
+        async with self._session() as s:
+            for m in messages:
+                if not m.message_id or not m.text:
+                    continue
+                exists = (
+                    await s.execute(
+                        select(ObservedMessageRow).where(
+                            ObservedMessageRow.message_id == m.message_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if exists is not None:
+                    continue
+                s.add(ObservedMessageRow(
+                    message_id=m.message_id, chat_id=chat_id,
+                    user_id=m.user_id, user_name=m.user_name,
+                    text=m.text, timestamp=m.timestamp,
+                ))
+                added += 1
+            await s.commit()
+        return added
+
+    async def load_observed(self, chat_id: str, *, since: float = 0.0, limit: int = 200) -> list[ChatMessage]:
+        """读取本群旁听消息（时间升序）。since 为Unix秒下限，limit 取最新 N 条。"""
+        async with self._session() as s:
+            q = (
+                select(ObservedMessageRow)
+                .where(ObservedMessageRow.chat_id == chat_id)
+                .order_by(ObservedMessageRow.timestamp.desc())
+            )
+            if since > 0:
+                q = q.where(ObservedMessageRow.timestamp >= since)
+            result = await s.execute(q.limit(limit))
+            # desc 取最新 N 条后翻回时间正序，供时间线合并
+            rows = list(result.scalars().all())
+            rows.reverse()
+            return [
+                ChatMessage(
+                    role="user", text=r.text, user_id=r.user_id,
+                    user_name=r.user_name, message_id=r.message_id, timestamp=r.timestamp,
+                )
+                for r in rows
+            ]
+
+    async def prune_observed(self, *, retain_days: int) -> int:
+        """保留期清理：删除 retain_days 天前的旁听消息。返回删除条数。"""
+        cutoff = time.time() - retain_days * 86400
+        async with self._session() as s:
+            result = await s.execute(
+                delete(ObservedMessageRow).where(ObservedMessageRow.timestamp < cutoff)
+            )
+            await s.commit()
+            return result.rowcount or 0
+
+    async def list_observed_chats(self) -> list[str]:
+        """重启补拉用：出现过旁听消息的群列表。"""
+        async with self._session() as s:
+            rows = await s.execute(select(ObservedMessageRow.chat_id).distinct())
+            return [r[0] for r in rows.all()]
+
+    async def list_binding_chats(self) -> list[str]:
+        """重启补拉用：绑定了仓库的群列表。"""
+        async with self._session() as s:
+            rows = await s.execute(select(GroupRepoBindingRow.chat_id).distinct())
+            return [r[0] for r in rows.all()]
 
     # ---- L3 ----
 

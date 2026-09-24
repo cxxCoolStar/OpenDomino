@@ -75,7 +75,7 @@ def _is_exact(text: str, keywords: list[str]) -> bool:
 
 
 def _free_response_chats() -> set[str]:
-    return {c.strip() for c in (settings.dingtalk_free_response_chats or "").split(",") if c.strip()}
+    return {c.strip() for c in (settings.feishu_free_response_chats or "").split(",") if c.strip()}
 
 
 class MemoryConfirmHandler:
@@ -87,7 +87,9 @@ class MemoryConfirmHandler:
     def _require_at(self, msg: UnifiedMessage) -> bool:
         # require_mention 的普通群，能进 pipeline 的消息必然 @ 过机器人；
         # 免 @ 群里必须显式校验 is_at_bot，防止旁人闲聊「确认」误写团队记忆。
-        if settings.dingtalk_require_mention and msg.chat_id not in _free_response_chats():
+        # 飞书全量接收下（ADR-008）@ 消息与旁听消息在通道层分流，进入管线的
+        # 消息必然已过 @ 门控，此处保留 is_at_bot 校验作为免 @ 场景的兜底。
+        if settings.feishu_require_mention and msg.chat_id not in _free_response_chats():
             return True
         return msg.is_at_bot
 

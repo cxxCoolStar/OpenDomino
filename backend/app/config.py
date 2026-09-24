@@ -17,15 +17,20 @@ class Settings(BaseSettings):
     sandbox_model: str                      # ADR-004：建议配比 console_model 更强的模型
     sandbox_llm_timeout_seconds: int = 120  # 执行循环单次 LLM 调用硬超时（编码任务输出长，比 console 宽）
 
-    # ---- ADR-001 入口层（钉钉）----
-    dingtalk_client_id: str = ""
-    dingtalk_client_secret: str = ""
-    dingtalk_require_mention: bool = True
-    dingtalk_allowed_users: str = "*"      # * = 所有人，否则逗号分隔 user_id
-    dingtalk_free_response_chats: str = ""  # 免 @ 即可响应的群，逗号分隔
-    dingtalk_allowed_chats: str = ""        # 群白名单（硬门控），逗号分隔
-    dingtalk_robot_code: str = ""           # 机器人主动发消息用；留空则取 dingtalk_client_id
-    dingtalk_robot_messages_enabled: bool = True  # 任务回传主通道开关；关闭则仅 session_webhook
+    # ---- ADR-008 入口层（飞书）----
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_domain: str = "https://open.feishu.cn"
+    feishu_require_mention: bool = True     # @ 门控：@ 才进管线，其余旁听
+    feishu_free_response_chats: str = ""    # 免 @ 即可进管线的群（仅特殊场景，旁听仍全量）
+    feishu_allowed_users: str = "*"         # * = 所有人，否则逗号分隔 user_id/open_id
+    feishu_allowed_chats: str = ""          # 群白名单（硬门控，同时约束旁听范围），逗号分隔
+    feishu_bot_open_id: str = ""            # 机器人 open_id（mentions 结构化 @ 判定用）
+    feishu_bot_user_id: str = ""            # 机器人 user_id（同上，可选）
+    feishu_backfill_days: int = 7           # 回拉时间窗（天）
+    feishu_backfill_max: int = 1000         # 单群单次回拉条数上限
+    feishu_observe_retain_days: int = 30    # 旁听消息保留期（天）
+    feishu_observe_window_hours: int = 6    # 注入上下文的旁听时间窗（小时），窗口外留 L2 存而不检索
 
     # ---- ADR-003 ConsoleAgent ----
     console_context_window: int = 20
@@ -53,7 +58,7 @@ class Settings(BaseSettings):
     session_summary_max_chars: int = 1500
 
     # ---- ADR-004 SandboxAgent ----
-    sandbox_docker_image: str = "python:3.12-slim"
+    sandbox_docker_image: str = "opendomino-sandbox:latest"  # 预装 git + /workspace（构建脚本见 handoff）
     sandbox_max_steps: int = 40
     sandbox_timeout_minutes: int = 30
     sandbox_command_timeout_seconds: int = 120

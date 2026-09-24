@@ -13,9 +13,9 @@ chromadb>=0.5
 # LLM
 openai>=1.40
 
-# 入口层（钉钉 Stream）
-dingtalk-stream>=0.20
+# 入口层（飞书 lark-oapi，WebSocket 长连接；httpx 供通道测试工具使用）
 httpx>=0.27
+lark-oapi>=1.4
 
 # 沙箱
 docker>=7.0

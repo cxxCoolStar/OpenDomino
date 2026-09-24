@@ -155,16 +155,21 @@ async def test_clarify_pending_carries_asked_user_id(mem):
 @pytest.mark.asyncio
 async def test_is_at_bot_flows_through_unified_message():
     """channel 层 is_at_bot 传入 UnifiedMessage。"""
-    from app.channels.dingtalk_parse import parse_message
+    from app.channels.feishu_parse import parse_message
 
     data = {
-        "conversationType": "2",
-        "text": {"content": "确认"},
-        "senderStaffId": "u1",
-        "conversationId": "cid1",
-        "msgId": "m1",
-        "sessionWebhook": "https://example.invalid",
-        "is_in_at_list": True,
+        "event": {
+            "message": {
+                "message_id": "om1",
+                "chat_type": "group",
+                "chat_id": "oc1",
+                "message_type": "text",
+                "content": "{\"text\":\"确认\"}",
+                "create_time": "1700000000000",
+                "mentions": [{"id": {"open_id": "ou_bot"}, "name": "Domino"}],
+            },
+            "sender": {"sender_id": {"user_id": "u1", "open_id": "ou1"}},
+        }
     }
-    parsed = parse_message(data)
+    parsed = parse_message(data, bot_open_id="ou_bot")
     assert parsed.is_at_bot is True

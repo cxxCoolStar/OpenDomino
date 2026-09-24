@@ -1,0 +1,148 @@
+{
+  "generated_at": "2026-09-24 18:25:12",
+  "adr": "ADR-008 feishu-channel",
+  "pass": 28,
+  "fail": 0,
+  "cases": [
+    {
+      "name": "parse: 群聊 text @bot",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "parse: at 标签剥离",
+      "ok": true,
+      "detail": "text='Domino 部署失败'"
+    },
+    {
+      "name": "parse: @_all 视为 @",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "parse: 未 @ 不误判",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "parse: post 渲染",
+      "ok": true,
+      "detail": "text='T\\n第一行链接'"
+    },
+    {
+      "name": "parse: p2p 标记",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "channel: @ 进管线",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "channel: 非 @ 进旁听不进管线",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "channel: message_id 去重",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "channel: bot 自消息丢弃",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "channel: 群白名单约束旁听",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "channel: 单聊不入管线/旁听",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "channel: 免 @ 群进管线",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "store: 写入与空文本过滤",
+      "ok": true,
+      "detail": "n=2"
+    },
+    {
+      "name": "store: message_id 幂等",
+      "ok": true,
+      "detail": "n=0"
+    },
+    {
+      "name": "store: 读取升序",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "store: 群列表",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "store: 保留期清理",
+      "ok": true,
+      "detail": "deleted=2"
+    },
+    {
+      "name": "context: @ 往来与旁听合并",
+      "ok": true,
+      "detail": "[群聊上下文]\n用户(张三): 张三：发布流程改成走 CI\n用户(李四): 李四：测试环境验证过了\n用户(王五): @Domino 就这么定行不行\nDomino(): 可以，理由如下…\n\n<正式文档 知识库>\n以下是团队维护的正式文档，为权威事实源；与团队经验冲突时以正式文档为准，并应指出冲突。\n- 【正式文档】《decisions/001-channel-layer.md》ADR-001 协作入口层：钉钉机器人（Stream 模式）：# ADR-001 协作入口层：钉钉机器人（Stream 模式）\n\n> 状态：已确认（2026-09-23 修订：入口收敛为仅钉钉群聊，移除 Web 群聊；Web 端后期仅作管理后台）\n> 日期：2026-09-22\n> 决策参考：hermes-agent（`C:\\Users\\CoolStar\\Downloads\\hermes-agent`）\n- 【正式文档】《standards/knowledge-doc-standard.md》知识库文档撰写规范 > 标题层级固定：## 标题层级固定\n\n每篇文档有且只有一个 `#` 一级标题；层级只用 `#`、`##`、`###` 三级，不跳级（`##` 下直接 `####`）。\n原因：切块器按标题构建块的头信息路径，跳级会导致路径断裂。\n- 【正式文档】《design/sandbox-agent-detail."
+    },
+    {
+      "name": "context: 时间戳归并排序",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "context: 段标签 [群聊上下文]",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "backfill: item text 解析",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "backfill: item post 解析",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "backfill: 已知群汇合",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "backfill: 未启动安全返回",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "config: FEISHU_* 配置齐备",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "config: DINGTALK_* 清零",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "config: 免 @ 群配置存在",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}

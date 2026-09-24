@@ -1,4 +1,4 @@
-"""OpenDomino API 与钉钉 Stream 运行入口。"""
+"""OpenDomino API 与飞书长连接运行入口（ADR-008）。"""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.channels.dingtalk import DingTalkChannel
+from app.channels.feishu import FeishuChannel
 from app.channels.registry import ChannelRegistry
 from app.config import settings
 from app.console.agent import ConsoleAgent
@@ -30,23 +30,38 @@ log = logging.getLogger("opendomino")
 async def lifespan(app: FastAPI):
     if not settings.llm_api_key:
         raise RuntimeError("LLM_API_KEY is required")
-    if not settings.dingtalk_client_id or not settings.dingtalk_client_secret:
-        raise RuntimeError("DINGTALK_CLIENT_ID and DINGTALK_CLIENT_SECRET are required")
+    if not settings.feishu_app_id or not settings.feishu_app_secret:
+        raise RuntimeError("FEISHU_APP_ID and FEISHU_APP_SECRET are required")
 
     memory = SQLiteMemoryService()
     await memory.init()
     llm = OpenAIClient()
     router = Router(llm)
 
-    channel: DingTalkChannel
+    channel: FeishuChannel
 
     async def reply(chat_id: str, text: str, session_webhook: str) -> None:
-        result = await channel.reply(chat_id, text, session_webhook=session_webhook)
+        result = await channel.reply(chat_id, text)
         if not result.ok:
-            log.error("DingTalk reply failed chat_id=%s error=%s", chat_id, result.error)
+            log.error("Feishu reply failed chat_id=%s error=%s", chat_id, result.error)
 
     async def on_message(msg) -> None:
         await agent.handle(msg)
+
+    async def save_observed(chat_id: str, msgs) -> None:
+        """旁听消息落 L2（存而不检索，ADR-008）。"""
+        try:
+            added = await memory.save_observed(
+                chat_id,
+                [
+                    _observed_to_chat_message(m)
+                    for m in msgs
+                ],
+            )
+            if added:
+                log.debug("observed saved chat_id=%s added=%d", chat_id, added)
+        except Exception:  # noqa: BLE001 —— 旁听落库失败不影响主管线
+            log.exception("save_observed failed chat_id=%s", chat_id)
 
     # ---- Sandbox 侧装配（ADR-004）----
     tasks = TaskService()
@@ -76,32 +91,61 @@ async def lifespan(app: FastAPI):
         return task_id
 
     agent = ConsoleAgent(memory=memory, router=router, reply=reply, delegate=delegate)
-    channel = DingTalkChannel(on_message=on_message)
+    channel = FeishuChannel(on_message=on_message, save_observed=save_observed)
     # channel 需先创建再注册进 registry（reply 闭包已持有引用）
     registry.register(channel)
 
     app.state.memory = memory
     app.state.console_agent = agent
-    app.state.dingtalk_channel = channel
+    app.state.feishu_channel = channel
     app.state.task_service = tasks
     app.state.task_executor = executor
     app.state.container_pool = pool
-    stream_task = asyncio.create_task(channel.start(), name="dingtalk-stream")
-    log.info("OpenDomino started; DingTalk Stream connecting")
+    ws_task = asyncio.create_task(channel.start(), name="feishu-ws")
+    log.info("OpenDomino started; Feishu WS connecting")
+
+    # 重启补拉：对已知群幂等回拉历史（ADR-008 旁听决策 4）
+    backfill_task = asyncio.create_task(_backfill_known_chats(channel, memory), name="feishu-backfill")
+
     try:
         yield
     finally:
-        stream_task.cancel()
-        try:
-            await stream_task
-        except asyncio.CancelledError:
-            pass
+        for t in (ws_task, backfill_task):
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         await executor.drain()
         await executor.close()
         await pool.close()
         await tasks.close()
-        await channel._http.aclose()
+        await channel.stop()
         await memory._engine.dispose()
+
+
+async def _backfill_known_chats(channel: FeishuChannel, memory: SQLiteMemoryService) -> None:
+    """重启补拉：旁听消息表出现过的群 + 已绑定仓库的群，按回拉时间窗幂等补拉。"""
+    import time
+
+    try:
+        chats = set(await memory.list_observed_chats())
+        chats.update(await memory.list_binding_chats())
+        since = time.time() - settings.feishu_backfill_days * 86400 if settings.feishu_backfill_days > 0 else 0.0
+        for chat_id in sorted(chats):
+            await channel.backfill(chat_id, since=since)
+        await memory.prune_observed(retain_days=settings.feishu_observe_retain_days)
+    except Exception:  # noqa: BLE001 —— 补拉失败不阻塞主流程
+        log.exception("feishu backfill on startup failed")
+
+
+def _observed_to_chat_message(m):
+    from app.memory.types import ChatMessage
+
+    return ChatMessage(
+        role="user", text=m.text, user_id=m.user_id,
+        user_name=m.user_name, message_id=m.message_id, timestamp=m.timestamp,
+    )
 
 
 app = FastAPI(title="OpenDomino", version="0.1.0", lifespan=lifespan)
@@ -116,5 +160,5 @@ async def health():
 async def ready():
     return {
         "status": "ready" if hasattr(app.state, "console_agent") else "starting",
-        "channel": "dingtalk-stream",
+        "channel": "feishu-ws",
     }

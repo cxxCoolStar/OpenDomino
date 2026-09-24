@@ -45,6 +45,15 @@ def parse_repo_registry() -> dict[str, str]:
 class ContextAssembler:
     def __init__(self, memory: MemoryService) -> None:
         self._memory = memory
+        self._observed_cache: dict[str, list[ChatMessage]] = {}
+
+    def prime_observed(self, chat_id: str, messages: list[ChatMessage]) -> None:
+        """注入本群旁听消息（管线每次 @ 消息处理前由 ConsoleAgent 调用）。
+
+        旁听缓冲来自 L2 observed_messages（ADR-008 存而不检索），装配侧只做
+        时间线合并；缓存以最近一次注入为准，不自行查询（保持装配器无 I/O）。
+        """
+        self._observed_cache[chat_id] = messages
 
     async def assemble(self, session: SessionContext, query: str) -> str:
         # 三层召回并行，单层失败不阻塞装配（失败静默跳过，学 hermes prefetch_all）
@@ -124,15 +133,28 @@ class ContextAssembler:
                  for r in repos]
         return "[本群可用仓库]\n" + "\n".join(lines)
 
-    # ---- 群聊上下文（不可裁剪）----
+    # ---- 群聊上下文（@ 往来 + 旁听消息合并时间线，ADR-008）----
 
     def _chat_section(self, session: SessionContext) -> str:
-        window = session.messages[-settings.console_context_window:]
-        if not window:
+        """段 2：session.messages（@ 往来）+ 旁听缓冲按时间戳合并为单一群聊时间线。
+
+        @ 对话不可裁剪（决策价值最高），旁听消息可裁剪（超预算先裁最老）。
+        旁听读取失败静默降级为仅 @ 往来（与召回段同策略）。
+        """
+        recent = list(session.messages[-settings.console_context_window:])
+        observed: list[ChatMessage] = []
+        try:
+            observed = self._observed_cache.get(session.chat_id) or []
+        except Exception:  # noqa: BLE001
+            observed = []
+        merged = sorted(
+            [*recent, *observed], key=lambda m: m.timestamp
+        )
+        if not merged:
             return ""
         lines = "\n".join(
             f"{'用户' if m.role == 'user' else 'Domino'}({m.user_name or m.user_id}): {m.text[:500]}"
-            for m in window
+            for m in merged
         )
         return f"[群聊上下文]\n{lines}"
 
