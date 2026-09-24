@@ -52,7 +52,6 @@ async def lifespan(app: FastAPI):
     tasks = TaskService()
     await tasks.init()
     registry = ChannelRegistry()
-    registry.register(channel)
     reporter = TaskReporter(registry)
     pool = ContainerPool()
     pool.start_sweeper()
