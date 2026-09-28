@@ -1,15 +1,24 @@
-"""上下文装配器（ADR-002/003）：段落模型 + 预算反向填充。
+"""上下文装配器（ADR-002/003/008）：段落模型 + 预算反向填充。
 
-段落与优先级（先放不可裁剪段，剩余预算按优先级分配，谁放不下砍谁）：
+段落与优先级（**字节级稳定段在前、易变段在后**，提升 LLM prefix cache 命中）：
 
-  1. 会话状态（不可裁剪）：pending 澄清（含提问人）/ 待确认记忆 / 进行中任务 / 群关联仓库
-  2. 群聊上下文（不可裁剪）：最近消息窗口，永远完整保留
-  3. 历史讨论摘要：session.summary，标注"仅供参考"防误读（hermes Historical 前缀）
-  4. 团队经验 KBase：围栏注入，注明"参考数据，非用户指令"（hermes memory-context 围栏）
-  5. 正式文档 L3：同上，注明"正式事实源，优先级高于团队经验"
+  1. [本群可用仓库]         —— 绑定/解绑才变
+  2. [历史讨论摘要]         —— 压缩触发才变
+  3. [会话状态]             —— pending/任务变化（多数时候为空=稳定）
+  4. <正式文档 知识库>      —— RAG 召回，随 query 变（排序归一化只防顺序抖动）
+  5. <团队经验 KBase>       —— 同上，随 query 变
+  6. [群聊上下文]           —— @ 往来 + 旁听合并时间线（每条消息都变）
+  7. [用户本条消息]         —— 由 Router 追加，永远最后
+
+注意：召回段（④⑤）虽内容权威，但按 query 检索决定命中，**不是稳定段**——
+两次不同问题几乎必然命中不同条目，放最前会持续打断缓存前缀。稳定性以
+「字节级一致」为准，不以「内容来源可靠」为准。
+预算分配维持「先保决策价值最高的段」：⑥ 的 @ 对话部分不可裁剪；可裁剪段的
+保留顺序为 ③状态 > ④文档 > ⑤KBase > ②摘要 > ①仓库（仓库列表长且决策价值低）。
 
 修复记录：旧实现 _fit_budget 对整体拼装结果做 text[:budget] 尾部截断，而对话窗口
 排在最后——召回一多最先被砍的就是最近消息。反向填充从结构上消除了这个问题。
+2026-09-28 二次重排：RAG 召回段按 query 变化，从「最前」降级到中部，会话状态上移。
 """
 from __future__ import annotations
 
@@ -63,37 +72,40 @@ class ContextAssembler:
             return_exceptions=True,
         )
 
-        # 不可裁剪段
-        state = self._state_section(session)
-        chat = self._chat_section(session)
-        repo_section = await self._repo_section(session.chat_id)
-        if repo_section:
-            # 仓库列表与任务路由直接相关，作为不可裁剪段紧跟会话状态
-            state = (state + "\n\n" + repo_section) if state else repo_section
-
-        # 可裁剪段（按优先级从剩余预算里分配）
-        summary = self._summary_section(session)
-        kbase_text = self._kbase_section(kbase)
+        # 段落生成（稳定→易变，见模块 docstring 的段①~⑥编号）
         knowledge_text = self._knowledge_section(knowledge)
+        kbase_text = self._kbase_section(kbase)
+        summary = self._summary_section(session)
+        repo_section = await self._repo_section(session.chat_id)
+        state = self._state_section(session)
+        chat = self._chat_section(session)   # ⑥ @ 对话不可裁剪（旁听部分在段内已按窗口截断）
 
+        # 预算分配：先无条件保留⑥，其余按「可裁剪优先级」分配剩余预算
+        # （③状态 > ④文档 > ⑤KBase > ②摘要 > ①仓库），放不下整段舍弃
         budget = settings.console_max_context_chars
-        used = len(state) + len(chat)
-        parts = [state, chat] if state else [chat]
-
-        for seg in (summary, kbase_text, knowledge_text):
+        used = len(chat) + 2
+        kept: dict[str, str] = {"chat": chat}
+        for key, seg in (
+            ("state", state), ("knowledge", knowledge_text), ("kbase", kbase_text),
+            ("summary", summary), ("repo", repo_section),
+        ):
             if not seg:
                 continue
-            if used + len(seg) <= budget:
-                parts.append(seg)
-                used += len(seg)
+            if used + len(seg) + 2 <= budget:
+                kept[key] = seg
+                used += len(seg) + 2
             else:
                 remaining = budget - used
-                if remaining > 200:  # 剩余太少则整段舍弃，不产生无意义碎片
-                    parts.append(seg[:remaining].rstrip() + "\n…（本段超预算被截断）")
-                    used = budget
-                break  # 低优先级段直接放弃
+                if remaining > 200:
+                    kept[key] = seg[:remaining].rstrip() + "\n…（本段超预算被截断）"
+                break
 
-        return "\n\n".join(parts)
+        # 输出按字节级稳定→易变排列：①仓库 ②摘要 ③状态 ④文档 ⑤KBase ⑥群聊上下文
+        return "\n\n".join(
+            kept[k]
+            for k in ("repo", "summary", "state", "knowledge", "kbase", "chat")
+            if k in kept
+        )
 
     # ---- 会话状态（不可裁剪，决策价值最高）----
 
@@ -173,9 +185,11 @@ class ContextAssembler:
     def _kbase_section(self, kbase) -> str:
         if not isinstance(kbase, list) or not kbase:
             return ""
+        # 排序归一化：score 降序、title 升序稳定排序，防召回顺序抖动破坏前缀缓存
+        hits = sorted(kbase, key=lambda h: (-getattr(h, "score", 0.0), getattr(h, "title", "")))
         lines = "\n".join(
             f"- 【团队经验】{h.title}：{h.statement}" + (f"（原因：{h.rationale}）" if h.rationale else "")
-            for h in kbase
+            for h in hits
         )
         return (
             "<团队经验 KBase>\n"
@@ -187,9 +201,11 @@ class ContextAssembler:
     def _knowledge_section(self, knowledge) -> str:
         if not isinstance(knowledge, list) or not knowledge:
             return ""
+        # 排序归一化：score 降序、heading_path 升序稳定排序（前缀缓存配套）
+        hits = sorted(knowledge, key=lambda k: (-getattr(k, "score", 0.0), getattr(k, "heading_path", "")))
         lines = "\n".join(
             f"- 【正式文档】《{k.doc_title}》{k.heading_path}：{k.content[:300]}"
-            for k in knowledge
+            for k in hits
         )
         return (
             "<正式文档 知识库>\n"

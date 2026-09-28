@@ -91,20 +91,29 @@ def parse_message(data: Any, *, bot_open_id: str = "", bot_user_id: str = "") ->
 
 
 def _extract_text_and_mentions(message: Any) -> tuple[str, list[str]]:
-    """提取文本与 @ 目标列表。text.content 为 JSON 字符串（text/post 两类），mentions 为结构化 @ 列表。"""
+    """提取文本与 @ 目标列表。text.content 为 JSON 字符串（text/post 两类），mentions 为结构化 @ 列表。
+
+    飞书正文中 @某人 是占位符（@_user_1 按序编号），真实名字在 mentions[].key/name。
+    返回前用该映射把占位符还原为显示名（@_user_1 → @Domino），LLM 才能读懂
+    「谁被 @ 了」；回拉链路（_parse_item_body）经 _placeholder_map 共用本还原逻辑。
+    """
     mentions: list[str] = []
+    placeholder_map: dict[str, str] = {}
     raw_mentions = _get(message, "mentions", default=[]) or []
     for m in raw_mentions:
         mid = _get(m, "id", default={})
-        for key in ("open_id", "user_id", "union_id"):
-            v = _get(mid, key, default="")
+        key = str(_get(m, "key", default="") or "")
+        name = str(_get(m, "name", default="") or "")
+        for id_key in ("open_id", "user_id", "union_id"):
+            v = _get(mid, id_key, default="")
             if v:
                 mentions.append(str(v))
                 break
         else:
-            name = str(_get(m, "name", default="") or "")
             if name:
                 mentions.append(name)  # key 无 id 时以 name 兜底（@_all 等）
+        if key and name:
+            placeholder_map[key] = name
 
     content_str = _get(_get(message, "text", default={}), "content", default="") or str(
         _get(message, "content", default="")
@@ -119,13 +128,23 @@ def _extract_text_and_mentions(message: Any) -> tuple[str, list[str]]:
         except (ValueError, TypeError):
             text = str(content_str)
         text = _strip_at_tags(text)
+        text = _restore_placeholders(text, placeholder_map)
         return text.strip(), mentions
 
     if message_type == "post":
-        return _render_post_text(content_str), mentions
+        return _restore_placeholders(_render_post_text(content_str), placeholder_map), mentions
 
     # 非文本类型：第一阶段记占位符（ADR-008 仅文本口径）
     return f"[不支持的消息类型: {message_type}]", mentions
+
+
+def _restore_placeholders(text: str, placeholder_map: dict[str, str]) -> str:
+    """把飞书 @ 占位符（@_user_1 等）替换为真实显示名。"""
+    if not text or not placeholder_map:
+        return text
+    for key, name in placeholder_map.items():
+        text = text.replace(key, f"@{name}")
+    return text
 
 
 def _strip_at_tags(text: str) -> str:

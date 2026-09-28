@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-24 18:25:12",
+  "generated_at": "2026-09-28 15:06:12",
   "adr": "ADR-008 feishu-channel",
   "pass": 28,
   "fail": 0,
@@ -97,7 +97,7 @@
     {
       "name": "context: @ 往来与旁听合并",
       "ok": true,
-      "detail": "[群聊上下文]\n用户(张三): 张三：发布流程改成走 CI\n用户(李四): 李四：测试环境验证过了\n用户(王五): @Domino 就这么定行不行\nDomino(): 可以，理由如下…\n\n<正式文档 知识库>\n以下是团队维护的正式文档，为权威事实源；与团队经验冲突时以正式文档为准，并应指出冲突。\n- 【正式文档】《decisions/001-channel-layer.md》ADR-001 协作入口层：钉钉机器人（Stream 模式）：# ADR-001 协作入口层：钉钉机器人（Stream 模式）\n\n> 状态：已确认（2026-09-23 修订：入口收敛为仅钉钉群聊，移除 Web 群聊；Web 端后期仅作管理后台）\n> 日期：2026-09-22\n> 决策参考：hermes-agent（`C:\\Users\\CoolStar\\Downloads\\hermes-agent`）\n- 【正式文档】《standards/knowledge-doc-standard.md》知识库文档撰写规范 > 标题层级固定：## 标题层级固定\n\n每篇文档有且只有一个 `#` 一级标题；层级只用 `#`、`##`、`###` 三级，不跳级（`##` 下直接 `####`）。\n原因：切块器按标题构建块的头信息路径，跳级会导致路径断裂。\n- 【正式文档】《design/sandbox-agent-detail."
+      "detail": "<正式文档 知识库>\n以下是团队维护的正式文档，为权威事实源；与团队经验冲突时以正式文档为准，并应指出冲突。\n- 【正式文档】《decisions/001-channel-layer.md》ADR-001 协作入口层：钉钉机器人（Stream 模式）：# ADR-001 协作入口层：钉钉机器人（Stream 模式）\n\n> 状态：已确认（2026-09-23 修订：入口收敛为仅钉钉群聊，移除 Web 群聊；Web 端后期仅作管理后台）\n> 日期：2026-09-22\n> 决策参考：hermes-agent（`C:\\Users\\CoolStar\\Downloads\\hermes-agent`）\n- 【正式文档】《standards/knowledge-doc-standard.md》知识库文档撰写规范 > 标题层级固定：## 标题层级固定\n\n每篇文档有且只有一个 `#` 一级标题；层级只用 `#`、`##`、`###` 三级，不跳级（`##` 下直接 `####`）。\n原因：切块器按标题构建块的头信息路径，跳级会导致路径断裂。\n- 【正式文档】《design/sandbox-agent-detail.md》SandboxAgent 详细设计：# SandboxAgent 详细设计\n\n> 状态：与 ADR-004 配套的实现级设计，逐点讨论确认（2026-09-23）\n> 前置：ADR-"
     },
     {
       "name": "context: 时间戳归并排序",

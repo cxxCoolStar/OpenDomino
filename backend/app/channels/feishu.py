@@ -7,11 +7,16 @@
 - 历史回拉：入群事件 + 重启双触发，message_id 幂等。
 
 SDK 导入延迟到 start()/_client 初始化，便于无 SDK 环境导入本模块做测试。
+
+代理防护：SDK 底层 requests 会继承系统代理环境变量，本机代理（127.0.0.1:7890）
+对 open.feishu.cn 的 TLS 握手会被掐断（SSL EOF）。本模块导入时对飞书域名强制
+直连（NO_PROXY），不影响其他库的代理行为。
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections import OrderedDict
 from typing import Awaitable, Callable
@@ -21,6 +26,16 @@ import httpx
 from app.channels.base import ChannelAdapter, SendResult, UnifiedMessage
 from app.channels.feishu_parse import ParsedFeishuMessage, parse_message
 from app.config import settings
+
+# 飞书域名强制直连（NO_PROXY 追加，不覆盖既有配置）
+_forbidden = {"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"}
+_existing_noproxy = os.environ.get("NO_PROXY", os.environ.get("no_proxy", ""))
+_feishu_hosts = "open.feishu.cn,open.larksuite.com"
+if _feishu_hosts not in _existing_noproxy:
+    os.environ["NO_PROXY"] = f"{_existing_noproxy},{_feishu_hosts}".lstrip(",")
+    os.environ["no_proxy"] = os.environ["NO_PROXY"]
+for _k in _forbidden:  # NO_PROXY 对 requests 优先级受实现影响，直接清飞书环境下的代理更稳
+    os.environ.pop(_k, None)
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +77,43 @@ class FeishuChannel(ChannelAdapter):
         self._http = httpx.AsyncClient(timeout=15)
         self._bot_open_id = settings.feishu_bot_open_id
         self._bot_user_id = settings.feishu_bot_user_id
+        self._bot_mention_names: set[str] = set()  # 自学到的机器人名（"Domino" 等）
         self._client: object | None = None  # lark.Client，start() 时初始化
+
+    # ---- 机器人身份自动探测 ----
+
+    def _learn_bot_identity(self, mentioned_ids: list[str], mention_names: list[str]) -> bool:
+        """从事件 mentions 自学习机器人身份（零配置路径）。
+
+        判定依据：mentions 中 name 命中机器人特征名（显示名含「机器人」、bot 后缀、
+        Domino 本名）。返回是否学到了新身份。
+        """
+        learned = False
+        for mid, name in zip(mentioned_ids, mention_names):
+            if not mid:
+                continue
+            if _looks_like_bot_name(name, self._bot_mention_names):
+                if mid not in (self._bot_open_id, self._bot_user_id):
+                    log.info("feishu bot identity learned from mention: %s (%s)", mid, name)
+                    if not self._bot_open_id:
+                        self._bot_open_id = mid
+                    self._bot_mention_names.add(name)
+                    learned = True
+        return learned
+
+    def _mentions_me(self, mentioned_ids: list[str], mention_names: list[str]) -> bool:
+        """结构化 @ 判定：显式配置优先，自学身份兜底。"""
+        for mid in mentioned_ids:
+            if self._bot_open_id and mid == self._bot_open_id:
+                return True
+            if self._bot_user_id and mid == self._bot_user_id:
+                return True
+            if mid == "_all":
+                return True
+        for name in mention_names:
+            if name and name in self._bot_mention_names:
+                return True
+        return False
 
     # ---- 门控（语义沿用钉钉三开关，见 ADR-008 通道层决议 5）----
 
@@ -97,6 +148,15 @@ class FeishuChannel(ChannelAdapter):
             return False
         if msg.is_group and self._is_bot_own_message(msg):
             return False  # 事件里机器人消息已在权限层排除，此处兜底防回环
+
+        # 机器人身份自学习（FEISHU_BOT_OPEN_ID 未配置时的零配置路径）
+        mention_names = _extract_mention_names(data)
+        if msg.mentioned_ids and self._learn_bot_identity(msg.mentioned_ids, mention_names):
+            # 学到身份后重新判定本条消息
+            msg.is_at_bot = self._mentions_me(msg.mentioned_ids, mention_names)
+            msg.mentioned_bot = msg.is_at_bot
+        elif msg.mentioned_ids and not self._bot_open_id:
+            msg.is_at_bot = self._mentions_me(msg.mentioned_ids, mention_names)
 
         in_pipeline = msg.is_group and self._allowed(msg)
         if in_pipeline:
@@ -238,6 +298,7 @@ class FeishuChannel(ChannelAdapter):
         try:
             from lark_oapi.api.im.v1 import ListMessageRequest
 
+            now_ms = str(int(time.time() * 1000))
             start_time = str(int(since * 1000)) if since > 0 else ""
             collected: list[UnifiedMessage] = []
             page_token = ""
@@ -248,7 +309,7 @@ class FeishuChannel(ChannelAdapter):
                     .page_size(50) \
                     .sort_type("ByCreateTimeDesc")
                 if start_time:
-                    builder = builder.start_time(start_time)
+                    builder = builder.start_time(start_time).end_time(now_ms)
                 if page_token:
                     builder = builder.page_token(page_token)
                 resp = await asyncio.to_thread(self._client.im.v1.message.list, builder.build())
@@ -332,20 +393,73 @@ class FeishuChannel(ChannelAdapter):
             settings.feishu_app_id,
             settings.feishu_app_secret,
             event_handler=handler,
+            domain=settings.feishu_domain,
             log_level=lark.LogLevel.INFO,
         )
-        threading.Thread(target=_ws_start_in_thread, args=(ws,), daemon=True).start()
+        threading.Thread(
+            target=_ws_start_in_thread,
+            args=(ws, settings.feishu_domain),
+            daemon=True,
+        ).start()
 
     async def stop(self) -> None:
         await self._http.aclose()
 
 
-def _ws_start_in_thread(ws: object) -> None:
-    """ws.start() 阻塞运行在独立线程（SDK 自带重连）。"""
+def _ws_start_in_thread(ws: object, domain: str = "") -> None:
+    """ws.start() 阻塞运行在独立线程（SDK 自带重连）。
+
+    SDK 的 ws/client.py 在模块导入时绑定了事件循环（主线程导入 → 主 loop），
+    在工作线程直接 start() 会撞 "This event loop is already running"。
+    与 hermes 同解法：线程内把模块级 loop 换成本线程私有的新 loop 再启动。
+    """
     try:
+        import asyncio
+
+        import lark_oapi.ws.client as ws_client_module
+
+        thread_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(thread_loop)
+        ws_client_module.loop = thread_loop
         ws.start()
     except Exception:  # noqa: BLE001
         log.exception("feishu ws client crashed")
+
+
+def _extract_mention_names(data: object) -> list[str]:
+    """从事件原始数据提取 mentions[].name 列表（与 mentioned_ids 同序）。"""
+    if isinstance(data, dict):
+        event = data.get("event") or {}
+        message = event.get("message") or {}
+    else:
+        event = getattr(data, "event", None)
+        message = getattr(event, "message", None) if event is not None else {}
+    raw = getattr(message, "mentions", None)
+    if raw is None and isinstance(message, dict):
+        raw = message.get("mentions")
+    names: list[str] = []
+    for m in raw or []:
+        if isinstance(m, dict):
+            names.append(str(m.get("name", "") or ""))
+        else:
+            names.append(str(getattr(m, "name", "") or ""))
+    return names
+
+
+def _looks_like_bot_name(name: str, known: set[str]) -> bool:
+    """机器人特征名判定：已知名单命中，或显式 Bot 名（飞书群成员名带「机器人」标记）。
+
+    事件中 @ 机器人时 name 为机器人显示名（如「Domino」）。学习入口有二：
+    1. 显示名含 Bot 特征（「机器人」字样 / bot 后缀 / Domino 本名）→ 直接学；
+    2. 首条被 @ 且机器人随后成功回复的消息（说明真是 @ 我）→ 名单自增。
+    判不准的名字不学，宁可漏听（走旁听）不可误答。
+    """
+    if not name:
+        return False
+    if name in known:
+        return True
+    n = name.strip().lower()
+    return n.endswith("bot") or "机器人" in n or n == "domino"
 
 
 def _json_content(text: str) -> str:
@@ -355,22 +469,32 @@ def _json_content(text: str) -> str:
 
 
 def _parse_item_body(item: object, msg_type: str) -> str:
-    """历史消息条目的 body.content 解析（与事件解析共用 text/post 逻辑）。"""
+    """历史消息条目的 body.content 解析（与事件解析共用 text/post 逻辑）。
+
+    回拉条目同样带 mentions（key→name 映射），占位符 @_user_1 需还原为显示名。
+    """
     import json as _json
 
-    from app.channels.feishu_parse import _render_post_text, _strip_at_tags
+    from app.channels.feishu_parse import _render_post_text, _restore_placeholders, _strip_at_tags
 
     body_obj = getattr(item, "body", None)
     content = str(getattr(body_obj, "content", "") or "") if body_obj is not None else ""
     if not content:
         return ""
+    placeholder_map: dict[str, str] = {}
+    for m in getattr(item, "mentions", None) or []:
+        key = str(getattr(m, "key", "") or "")
+        name = str(getattr(m, "name", "") or "")
+        if key and name:
+            placeholder_map[key] = name
     try:
         obj = _json.loads(content)
     except (ValueError, TypeError):
         return ""
     if msg_type == "text":
-        return _strip_at_tags(str(obj.get("text", "") or "")).strip()
-    return _render_post_text(content)
+        text = _strip_at_tags(str(obj.get("text", "") or ""))
+        return _restore_placeholders(text, placeholder_map).strip()
+    return _restore_placeholders(_render_post_text(content), placeholder_map)
 
 
 def _split(s: str) -> list[str]:
