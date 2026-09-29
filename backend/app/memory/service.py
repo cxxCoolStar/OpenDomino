@@ -331,7 +331,9 @@ class SQLiteMemoryService:
     async def confirm_memory(self, memory_id: str, actor_id: str) -> None:
         """确认条目；带 supersedes_id 时将旧条目转 archived（ADR-009 过时内容处理）。
 
-        旧条目缺失或已非 confirmed 时丢弃替代关系按普通新条目处理（ADR-009 决议）。
+        supersedes_id 指向的旧条目缺失或已非 confirmed 时丢弃替代语义按普通新条目
+        处理（重复确认幂等：旧条目已是 archived 则不再满足条件）。归档成功后保留
+        本条目的 supersedes_id 反向指针，保留「这条替代了哪条」的审计链。
         """
         async with self._session() as s:
             row = await s.get(MemoryRow, memory_id)
@@ -344,10 +346,8 @@ class SQLiteMemoryService:
                     if old is not None and old.status == MemoryStatus.CONFIRMED.value:
                         old.status = MemoryStatus.ARCHIVED.value
                         old.updated_at = time.time()
-                        # 替代生效后清空指向，避免重复归档语义
-                        row.supersedes_id = ""
-                    else:
-                        row.supersedes_id = ""
+                else:
+                    row.supersedes_id = ""
                 await s.commit()
         await self._index_memory_vector(memory_id)
 
@@ -381,20 +381,6 @@ class SQLiteMemoryService:
                 memory_type=r.memory_type, rationale=r.rationale,
                 status=MemoryStatus(r.status),
             )
-
-    async def get_memory_full(self, memory_id: str) -> dict | None:
-        """蒸馏用：取条目完整字段（含 supersedes_id / source），供 LLM 比对冲突。"""
-        async with self._session() as s:
-            r = await s.get(MemoryRow, memory_id)
-            if r is None:
-                return None
-            return {
-                "id": r.id, "title": r.title, "statement": r.statement,
-                "memory_type": r.memory_type, "rationale": r.rationale,
-                "keywords": _parse_keywords(r.keywords_json),
-                "status": r.status, "supersedes_id": r.supersedes_id,
-                "source_type": r.source_type, "source_chat_id": r.source_chat_id,
-            }
 
     async def delete_memory(self, memory_id: str) -> bool:
         """条目级 remove（ADR-002 写入治理）。拒绝/过期的 pending 草稿物理删除。"""
@@ -560,9 +546,11 @@ class SQLiteMemoryService:
     ) -> list[ChatMessage]:
         """读取水位线之后的旁听消息（最老优先，ADR-009 蒸馏输入）。
 
-        水位线按本地接收时间 received_at 比较（与飞书消息时间戳解耦，无跨端时钟
-        偏差）；与 load_observed 的「最新 N 条」语义相反：蒸馏必须覆盖最老的未蒸
-        消息，积压时借后续周期逐批推进。
+        水位线按消息时间戳 timestamp 比较——与 prune 的「已蒸才可清」判定同一
+        维度。首见回拉存量 timestamp 恒老于水位线，天然落在已覆盖侧。跨端时钟偏差
+        的最坏影响是边界消息重复进入下一批（LLM 再看一次，无正确性影响）。
+        与 load_observed 的「最新 N 条」语义相反：蒸馏必须覆盖最老的未蒸消息，
+        积压时借后续周期逐批推进。
         """
         async with self._session() as s:
             rows = (
@@ -570,9 +558,9 @@ class SQLiteMemoryService:
                     select(ObservedMessageRow)
                     .where(
                         ObservedMessageRow.chat_id == chat_id,
-                        ObservedMessageRow.received_at > watermark_ts,
+                        ObservedMessageRow.timestamp > watermark_ts,
                     )
-                    .order_by(ObservedMessageRow.received_at.asc())
+                    .order_by(ObservedMessageRow.timestamp.asc())
                     .limit(limit)
                 )
             ).scalars().all()
@@ -584,17 +572,17 @@ class SQLiteMemoryService:
                 for r in rows
             ]
 
-    async def last_undistilled_received_at(self, chat_id: str, watermark_ts: float) -> float | None:
-        """水位线之后最新一条旁听消息的本地接收时间（水位线推进目标值）。"""
+    async def last_undistilled_timestamp(self, chat_id: str, watermark_ts: float) -> float | None:
+        """水位线之后最新一条旁听消息的消息时间戳（水位线推进目标值，同维度单调推进）。"""
         async with self._session() as s:
             row = (
                 await s.execute(
-                    select(ObservedMessageRow.received_at)
+                    select(ObservedMessageRow.timestamp)
                     .where(
                         ObservedMessageRow.chat_id == chat_id,
-                        ObservedMessageRow.received_at > watermark_ts,
+                        ObservedMessageRow.timestamp > watermark_ts,
                     )
-                    .order_by(ObservedMessageRow.received_at.desc())
+                    .order_by(ObservedMessageRow.timestamp.desc())
                     .limit(1)
                 )
             ).scalar_one_or_none()
@@ -607,7 +595,7 @@ class SQLiteMemoryService:
                 select(ObservedMessageRow.message_id)
                 .where(
                     ObservedMessageRow.chat_id == chat_id,
-                    ObservedMessageRow.received_at > watermark_ts,
+                    ObservedMessageRow.timestamp > watermark_ts,
                 )
             )
             return len(row.all())
@@ -630,10 +618,11 @@ class SQLiteMemoryService:
     ) -> int:
         """保留期清理：删除 retain_days 天前的旁听消息。返回删除条数。
 
-        respect_watermark=True（ADR-009）：只清理「本地接收时间在水位线之前」的
-        消息——未蒸馏的消息不论多老都保留，宁可缓冲变大也不静默丢数据；水位线
-        卡住时清理自然停滞，蒸馏恢复后追赶。开关关闭时退回纯年龄清理
-        （E2E/关闭蒸馏场景）。
+        年龄判定按消息时间戳 timestamp（消息龄，ADR-008 保留期语义）。respect_watermark=True
+        （ADR-009）时叠加第二条件「timestamp 在水位线之前」——与蒸馏范围查询同一
+        维度：不在任何未蒸馏集合里的消息才可清，未蒸馏的消息不论多老都保留，
+        宁可缓冲变大也不静默丢数据；水位线卡住时清理自然停滞，蒸馏恢复后追赶。
+        开关关闭时退回纯年龄清理（E2E/关闭蒸馏场景）。
         """
         cutoff = time.time() - retain_days * 86400
         async with self._session() as s:
@@ -654,15 +643,15 @@ class SQLiteMemoryService:
                     result = await s.execute(
                         delete(ObservedMessageRow).where(
                             ObservedMessageRow.chat_id == chat_id,
-                            ObservedMessageRow.received_at < cutoff,
-                            ObservedMessageRow.received_at < wm,
+                            ObservedMessageRow.timestamp < cutoff,
+                            ObservedMessageRow.timestamp < wm,
                         )
                     )
                     deleted += result.rowcount or 0
                 await s.commit()
                 return deleted
             result = await s.execute(
-                delete(ObservedMessageRow).where(ObservedMessageRow.received_at < cutoff)
+                delete(ObservedMessageRow).where(ObservedMessageRow.timestamp < cutoff)
             )
             await s.commit()
             return result.rowcount or 0
@@ -680,9 +669,10 @@ class SQLiteMemoryService:
     ) -> DistillState:
         """取蒸馏游标；首见按 init_watermark 初始化落库。
 
-        init_watermark 语义：水位线基于本地接收时间（received_at），首见取 None
-        时由实现取「当前表内最新 received_at」——首见前已落库的消息全部视为存量，
-        不被蒸馏（ADR-009 首见决议）；显式传 0.0 表示全量蒸馏（测试用）。
+        init_watermark 语义：首见取 None 时实现取「当前表内最新 received_at」。
+        水位线与消息 timestamp 比较，而首见锚点取 received_at——存量消息（含回拉，
+        timestamp 恒早于落库时刻）的 timestamp 恒小于该锚点，天然落入已覆盖侧，
+        首见不蒸存量（ADR-009 首见决议）；显式传 0.0 表示全量蒸馏（测试用）。
         """
         async with self._session() as s:
             row = await s.get(DistillStateRow, chat_id)

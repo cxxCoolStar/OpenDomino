@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-28 18:30:39",
+  "generated_at": "2026-09-29 10:17:42",
   "adr": "ADR-008 feishu-channel",
   "pass": 28,
   "fail": 0,
@@ -97,7 +97,7 @@
     {
       "name": "context: @ 往来与旁听合并",
       "ok": true,
-      "detail": "<正式文档 知识库>\n以下是团队维护的正式文档，为权威事实源；与团队经验冲突时以正式文档为准，并应指出冲突。\n- 【正式文档】《decisions/009-overheard-distillation.md》ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆：# ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆\n\n> 状态：讨论稿（待确认）\n> 日期：2026-09-28\n> 前置依赖：ADR-002 三层记忆（KBase 确认流）、ADR-008 飞书通道（旁听缓冲）\n> 关联：ADR-003 ConsoleAgent（Session 状态机）\n- 【正式文档】《decisions/001-channel-layer.md》ADR-001 协作入口层：钉钉机器人（Stream 模式）：# ADR-001 协作入口层：钉钉机器人（Stream 模式）\n\n> 状态：已确认（2026-09-23 修订：入口收敛为仅钉钉群聊，移除 Web 群聊；Web 端后期仅作管理后台）\n> 日期：2026-09-22\n> 决策参考：hermes-agent（`C:\\Users\\CoolStar\\Downloads\\hermes-agent`）\n- 【正式文档】《design/sandbox-agent-detail.md》SandboxAgent 详细设计：# SandboxAge"
+      "detail": "<正式文档 知识库>\n以下是团队维护的正式文档，为权威事实源；与团队经验冲突时以正式文档为准，并应指出冲突。\n- 【正式文档】《decisions/009-overheard-distillation.md》ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆：# ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆\n\n> 状态：已确认（2026-09-28 讨论定稿并实施）\n> 日期：2026-09-28\n> 前置依赖：ADR-002 三层记忆（KBase 确认流）、ADR-008 飞书通道（旁听缓冲）\n> 关联：ADR-003 ConsoleAgent（Session 状态机）\n- 【正式文档】《decisions/001-channel-layer.md》ADR-001 协作入口层：钉钉机器人（Stream 模式）：# ADR-001 协作入口层：钉钉机器人（Stream 模式）\n\n> 状态：已确认（2026-09-23 修订：入口收敛为仅钉钉群聊，移除 Web 群聊；Web 端后期仅作管理后台）\n> 日期：2026-09-22\n> 决策参考：hermes-agent（`C:\\Users\\CoolStar\\Downloads\\hermes-agent`）\n- 【正式文档】《standards/knowledge-doc-standard.md》知识库文档撰写规范 "
     },
     {
       "name": "context: 时间戳归并排序",

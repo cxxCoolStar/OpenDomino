@@ -58,9 +58,20 @@ SQLite `distill_state` 表（重启后恢复，不重蒸不漏蒸）。蒸馏范
 水位线」的旁听消息，单次最多 `distill_batch_max`（默认 200 条，最老优先），
 积压借后续空闲周期逐批推进。
 
-首见初始化：某群第一次被扫描器看到时，水位线置为当时本地时间——首次部署不蒸 7 天
-回拉的存量讨论（老结论确认时效已过，且首日会爆发式产生提议）。部署后水位线随三态
+#### 水位线的比较维度与首见初始化
+
+水位线与「已蒸馏范围」的判定统一按**消息时间戳**（飞书服务器钟）比较：蒸馏范围
+查询、prune 的「已蒸才可清」条件、水位线推进目标三者同维度，保证「不在任何未蒸馏
+集合里的消息才可清」。跨端时钟偏差的最坏影响是边界消息偶尔重复进入下一批
+（LLM 再看一次，无正确性影响）；本地接收时间 `received_at` 不用于水位线判定——
+回拉旧消息的 received_at 恒为落库时刻，按它判「已蒸」会让回拉存量永远清不掉。
+
+首见初始化：某群第一次被扫描器看到时，水位线置为当时表内最新本地接收时间——
+首次部署不蒸 7 天回拉的存量讨论（老结论确认时效已过，且首日会爆发式产生提议；
+存量消息的消息时间戳恒早于落库时刻，天然落在首见锚点之前）。部署后水位线随三态
 语义演进并持久化，重启期间漏收的消息（时间戳晚于水位线）重启后仍会被正常蒸馏。
+
+#### 三态推进语义
 
 水位线只在人表态时推进，三态语义如下：
 
@@ -122,14 +133,15 @@ SQLite `distill_state` 表（重启后恢复，不重蒸不漏蒸）。蒸馏范
     │               ├─ 确认 → KBase confirmed（supersedes 时旧条目 archived）
     │               ├─ 取消 → 水位线推进，不入库
     │               └─ 过期 → 水位线不动，下周期重蒸
-    └─ 保留期清理：年龄超限 且 在水位线之前 才可删
+    └─ 保留期清理：消息龄超限 且 消息时间戳在水位线之前 才可删
 ```
 
 数据新增：
 
-- `distill_state` 表：`chat_id` 主键、`watermark_ts`（水位线）、
+- `distill_state` 表：`chat_id` 主键、`watermark_ts`（水位线，按消息时间戳比较）、
   `last_success_at` / `last_failure_at`（冷却锚点）；
-- `observed_messages` 表增加 `received_at` 列（本地接收时间，空闲判定与写前校验用）；
+- `observed_messages` 表增加 `received_at` 列（本地接收时间，空闲判定与写前校验用，
+  不参与水位线判定）；
 - `kbase_memories` 表增加 `supersedes_id`、`source_type`（manual / overheard /
   correction）、`source_chat_id` 列（溯源与来源标记）。
 
@@ -173,8 +185,9 @@ ADR-002 不存储清单 + 确认流人审兜底，无独立过滤组件。LLM �
 - `memory/types.py`：`MemoryDraft` 增加 `supersedes_id`、`source_type`、
   `source_chat_id`；新增 `DistillState`。
 - `memory/service.py`：`distill_state` 表与水位线读写；`observed_messages` 增加
-  `received_at`；`load_observed` 支持 最老优先；`prune_observed` 增加「在水位线
-  之前」删除条件；`confirm_memory` 支持 supersedes 归档。
+  `received_at`；`load_undistilled` / `count_undistilled`（水位线按消息时间戳比较，
+  最老优先）；`prune_observed` 增加「消息时间戳在水位线之前」删除条件（年龄按
+  消息龄判）；`confirm_memory` 支持 supersedes 归档（保留反向指针留审计）。
 - `console/memory_confirm.py`：确认/取消时按 payload 推进水位线；确认词常量公开。
 - `console/distiller.py`（新增）：扫描循环 + 蒸馏调用 + 写前校验 + 提议写入。
 - `console/agent.py`：公开群锁访问入口（蒸馏写 Session 复用同一把锁）。

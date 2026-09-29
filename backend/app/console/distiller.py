@@ -206,7 +206,7 @@ class Distiller:
         )
         if not messages:
             return
-        batch_end_received = await self._memory.last_undistilled_received_at(
+        batch_end_ts = await self._memory.last_undistilled_timestamp(
             chat_id, state.watermark_ts
         ) or max(m.timestamp for m in messages)
 
@@ -227,7 +227,7 @@ class Distiller:
             # 明确「无可沉淀」：没有提议对象，推进水位线，否则同一范围每冷却
             # 周期空转一次（ADR-009 水位线决议）。
             state.last_success_at = time.time()
-            state.watermark_ts = max(state.watermark_ts, batch_end_received)
+            state.watermark_ts = max(state.watermark_ts, batch_end_ts)
             await self._memory.save_distill_state(state)
             log.info("distilled nothing: chat=%s watermark->%.0f", chat_id, state.watermark_ts)
             return
@@ -243,11 +243,11 @@ class Distiller:
         if self._chat_locks is not None:
             lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
             async with lock:
-                await self._propose(chat_id, state, batch_end_received, data)
+                await self._propose(chat_id, state, batch_end_ts, data)
         else:
-            await self._propose(chat_id, state, batch_end_received, data)
+            await self._propose(chat_id, state, batch_end_ts, data)
 
-    async def _propose(self, chat_id: str, state, batch_end_received: float, data: dict) -> None:
+    async def _propose(self, chat_id: str, state, batch_end_ts: float, data: dict) -> None:
         """建草稿、挂槽位、发提议（持锁执行）。水位线在确认/取消时推进。"""
         session = await self._memory.load_session(chat_id)
         # 持锁后复检槽位：人工提议可能在蒸馏期间到达
@@ -278,14 +278,14 @@ class Distiller:
             payload={
                 "memory_id": memory_id,
                 "source": MEMORY_SOURCE_OVERHEARD,
-                "watermark_ts": batch_end_received,   # 确认/取消时由拦截器推进
+                "watermark_ts": batch_end_ts,   # 确认/取消时由拦截器推进
             },
         )
         await self._memory.save_session(session)
         state.last_success_at = time.time()
         await self._memory.save_distill_state(state)
         log.info("distill proposed: chat=%s memory=%s watermark_target=%.0f",
-                 chat_id, memory_id, batch_end_received)
+                 chat_id, memory_id, batch_end_ts)
         if self._reply is not None:
             supersede_note = ""
             if draft.supersedes_id:
@@ -300,7 +300,7 @@ class Distiller:
     # ---- 输入构建 ----
 
     async def _kbase_context(self, messages: list[ChatMessage]) -> str:
-        """现有 KBase 条目上下文：≤阈值全量注入，否则按讨论内容召回。"""
+        """现有 KBase 条目上下文：经 recall_kbase 三级召回（少时全量注入，多时向量/关键词）。"""
         from app.config import settings as cfg
 
         query = " ".join(m.text for m in messages)[-500:]

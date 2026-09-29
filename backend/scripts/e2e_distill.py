@@ -83,12 +83,6 @@ class FakeLLM:
             raise RuntimeError(out)
         return out
 
-    @property
-    def last_user(self) -> str:
-        return self._last_user
-
-    _last_user: str = ""
-
 
 class Recorder:
     """记录锁使用情况与提议回复。"""
@@ -145,20 +139,13 @@ def make_reply(rec: Recorder):
 
 async def test_first_seen_and_idle_trigger(memory: SQLiteMemoryService) -> None:
     chat = "oc_first"
-    # 存量消息（模拟回拉）：先落库，received_at 也是老的 → 首见水位线覆盖它
+    # 存量消息（模拟回拉）：timestamp 是 8 天前（飞书服务器钟），received_at 保持
+    # 当前时刻（刚回拉落库，本地钟）→ 首见锚点=最新 received_at=now，存量 timestamp
+    # 远老于锚点，不计入未蒸馏
     old_msgs = obs_msgs(chat, 3, time.time() - 8 * 86400)
     await memory.save_observed(chat, old_msgs)
-    from sqlalchemy import update
-    from app.memory.service import ObservedMessageRow
-    async with memory._session() as s:
-        await s.execute(
-            update(ObservedMessageRow)
-            .where(ObservedMessageRow.chat_id == chat)
-            .values(received_at=time.time() - 8 * 86400)
-        )
-        await s.commit()
 
-    # 首见：水位线取表内最新接收时间 → 存量（received_at 更早）不可蒸馏
+    # 首见：水位线锚点取表内最新接收时间（now）
     state = await memory.get_distill_state(chat)
     undistilled = await memory.count_undistilled(chat, state.watermark_ts)
     check("1. 首见初始化：存量消息不计入未蒸馏", undistilled == 0, f"undistilled={undistilled}")
@@ -169,8 +156,9 @@ async def test_first_seen_and_idle_trigger(memory: SQLiteMemoryService) -> None:
     rec = Recorder()
     d = Distiller(memory, llm2, chat_locks={}, reply=make_reply(rec))
 
-    # 新消息（时间戳晚于水位线）到达后已空闲超阈值
-    new_msgs = obs_msgs(chat, 2, time.time() - IDLE - 120)
+    # 新消息到达后已空闲超阈值。首见锚点=now，新消息 timestamp 必须 > 锚点
+    # 才计入未蒸馏——timestamp 取 now-60（刚发生），空闲用 received_at 回拨表达
+    new_msgs = obs_msgs(chat, 2, time.time() - 60)
     await settle(memory, chat, new_msgs, age_seconds=IDLE + 60)
 
     await d._scan_once()
@@ -359,6 +347,28 @@ async def test_prune_watermark(memory: SQLiteMemoryService) -> None:
     remaining3 = await memory.load_observed(chat3, limit=10)
     check("6. prune：无水位线记录的群不清理", deleted3 == 0 and len(remaining3) == 1,
           f"deleted={deleted3} remaining={len(remaining3)}")
+
+    # 回拉存量（P1 回归锁）：timestamp 是 40 天前（消息龄超保留期）、received_at 是
+    # 现在（刚回拉落库）。水位线推到两条之间：较新的那条已在水位线之前（已蒸馏）
+    # → 按消息龄应清；较老的那条在水位线之后（蒸馏范围最老优先，它还没被蒸到）
+    # → 必须保留，不静默丢回拉数据。
+    chat4 = "oc_prune_backfill"
+    bf_ts = time.time() - 40 * 86400
+    await memory.get_distill_state(chat4, init_watermark=bf_ts + 30)  # 水位线在两条之间
+    await memory.save_observed(chat4, [
+        ChatMessage(role="user", text="回拉存量已蒸", user_id="u", message_id=f"{chat4}-bf-covered",
+                    timestamp=bf_ts),
+        ChatMessage(role="user", text="回拉存量未蒸", user_id="u", message_id=f"{chat4}-bf-uncovered",
+                    timestamp=bf_ts + 60),
+    ])
+    # received_at 保持 save_observed 写入的当前时刻（模拟刚回拉回来）
+    deleted4 = await memory.prune_observed(retain_days=30, respect_watermark=True)
+    remaining4 = {m.message_id for m in await memory.load_observed(chat4, limit=10)}
+    check("6. prune：回拉存量按消息龄判——已蒸的清、未蒸的保留",
+          deleted4 == 1
+          and f"{chat4}-bf-covered" not in remaining4
+          and f"{chat4}-bf-uncovered" in remaining4,
+          f"deleted={deleted4} remaining={sorted(remaining4)}")
 
 
 # ---------- 7. 冷却 + 3. 写前校验 + 8. 槽位 + 9. 多条 + 10. 无可沉淀 ----------
