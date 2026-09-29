@@ -88,7 +88,10 @@ def _err(message: str) -> str:
 _SCHEMAS: dict[str, dict] = {
     "list_dir": {
         "name": "list_dir",
-        "description": "列出仓库内目录内容（名称、类型、大小）。路径相对工作区根。",
+        "description": (
+            "列出仓库内目录内容（名称、类型、大小）。路径相对工作区根。"
+            "用于了解目录结构；已知具体文件路径时直接 read_file，无需先列目录预检查。"
+        ),
         "parameters": {
             "type": "object",
             "properties": {"path": {"type": "string", "description": "目录路径，默认根目录"}},
@@ -96,7 +99,12 @@ _SCHEMAS: dict[str, dict] = {
     },
     "read_file": {
         "name": "read_file",
-        "description": "读取仓库内文本文件全文（二进制文件会被拒绝）。超长文件尾部截断。",
+        "description": (
+            "读取仓库内文本文件全文（二进制文件会被拒绝）。超长文件尾部截断。"
+            "已知路径直接读，读取失败会返回错误——错误本身就是有效信息，"
+            "不要先 list_dir 确认文件存在；文件刚写入成功后不要重读验证，"
+            "写入成功即已落盘。"
+        ),
         "parameters": {
             "type": "object",
             "required": ["path"],
@@ -105,7 +113,11 @@ _SCHEMAS: dict[str, dict] = {
     },
     "grep": {
         "name": "grep",
-        "description": "在仓库内按正则搜索文本，返回匹配行（文件:行号:内容）。",
+        "description": (
+            "在仓库内按正则搜索文本，返回匹配行（文件:行号:内容）。"
+            "用于查找不确定位置的内容或定义/调用点；"
+            "已知具体文件要看内容时直接 read_file，不要用 grep 变相读文件。"
+        ),
         "parameters": {
             "type": "object",
             "required": ["pattern"],
@@ -117,7 +129,11 @@ _SCHEMAS: dict[str, dict] = {
     },
     "write_file": {
         "name": "write_file",
-        "description": "整体写入一个文件（覆盖已有内容；目录不存在会自动创建）。",
+        "description": (
+            "整体写入一个文件（覆盖已有内容；目录不存在会自动创建）。"
+            "用于新建文件或放弃增量修补时整体重写；对已有文件做局部修改优先 apply_patch。"
+            "写入成功后文件即已更新，无需重读确认。"
+        ),
         "parameters": {
             "type": "object",
             "required": ["path", "content"],
@@ -129,19 +145,35 @@ _SCHEMAS: dict[str, dict] = {
     },
     "apply_patch": {
         "name": "apply_patch",
-        "description": "对已有文件应用统一 diff（unified diff）补丁。",
+        "description": (
+            "对已有文件应用 V4A 格式补丁（不是 unified diff）。格式：\n"
+            "*** Begin Patch\n"
+            "*** Update File: path/to/file.py\n"
+            "@@ 上下文提示 @@\n"
+            " 上下文行（行首保留空格）\n"
+            "-被删除的行\n"
+            "+新增的行\n"
+            "*** End Patch\n"
+            "规则：上下文行取自最近一次读到的文件内容，文件改过之后先重读再写补丁，"
+            "不要重放旧补丁；同一处补丁失败两次就不要再试第三次，改用 write_file "
+            "整体重写该函数或文件。"
+        ),
         "parameters": {
             "type": "object",
-            "required": ["path", "diff"],
+            "required": ["diff"],
             "properties": {
-                "path": {"type": "string"},
-                "diff": {"type": "string", "description": "unified diff 文本"},
+                "diff": {"type": "string", "description": "V4A 格式补丁文本，见工具描述中的格式说明"},
             },
         },
     },
     "run_command": {
         "name": "run_command",
-        "description": "在工作区执行 bash 命令（构建、测试、git 等）。有单命令超时；输出尾部截断。",
+        "description": (
+            "在工作区执行 bash 命令（构建、测试、git、安装依赖等）。有单命令超时；输出尾部截断。"
+            "读文件用 read_file、搜内容用 grep、写文件用 write_file/apply_patch，"
+            "不要用 cat/grep/sed/echo 等 shell 命令替代专用工具；"
+            "命令输出里的测试结果要亲眼看确认通过后再声称完成。"
+        ),
         "parameters": {
             "type": "object",
             "required": ["command"],
@@ -150,7 +182,10 @@ _SCHEMAS: dict[str, dict] = {
     },
     "git_diff": {
         "name": "git_diff",
-        "description": "查看当前工作区相对基线的全部改动（git diff）。无改动时返回空。",
+        "description": (
+            "查看当前工作区相对基线的全部改动（git diff）。"
+            "提交前用它自查改动范围，确认没有无关改动混入。无改动时返回空。"
+        ),
         "parameters": {"type": "object", "properties": {}},
     },
     "git_log": {
