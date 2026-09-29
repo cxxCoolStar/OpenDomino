@@ -256,6 +256,8 @@ async def test_reply_format_selection():
     check("md card: markdown 组件承载全文",
           card["body"]["elements"][0]["tag"] == "markdown"
           and card["body"]["elements"][0]["content"] == "## 标题\n| a | b |")
+    # 回归：config.update_multi=false 会被飞书拒（230099/ErrCode 300302），整段 config 不带
+    check("md card: 不带 config 字段", "config" not in card)
 
     # reply 分流与降级：mock client 记录每次 create 的 msg_type/content
     sent: list[tuple[str, str]] = []

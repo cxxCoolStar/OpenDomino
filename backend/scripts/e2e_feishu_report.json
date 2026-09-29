@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-29 16:57:38",
+  "generated_at": "2026-09-29 17:18:04",
   "adr": "ADR-008 feishu-channel",
-  "pass": 43,
+  "pass": 44,
   "fail": 0,
   "cases": [
     {
@@ -190,9 +190,14 @@
       "detail": ""
     },
     {
+      "name": "md card: 不带 config 字段",
+      "ok": true,
+      "detail": ""
+    },
+    {
       "name": "reply: markdown 走卡片",
       "ok": true,
-      "detail": "sent=[('interactive', '{\"schema\": \"2.0\", \"config\": {\"update_multi\": false}, \"body\": {\"elements\": [{\"tag\": \"markdown\", \"content\": \"## 排查结论\\\\n| 文件 | 职责 |\\\\n|---|---|\\\\n| a.py | 主管线 |\"}]}}')]"
+      "detail": "sent=[('interactive', '{\"schema\": \"2.0\", \"body\": {\"elements\": [{\"tag\": \"markdown\", \"content\": \"## 排查结论\\\\n| 文件 | 职责 |\\\\n|---|---|\\\\n| a.py | 主管线 |\"}]}}')]"
     },
     {
       "name": "reply: 卡片含原文",

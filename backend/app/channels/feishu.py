@@ -527,12 +527,13 @@ def _build_markdown_card(text: str) -> str:
     """构造 JSON 2.0 卡片：单 markdown 组件承载全文。
 
     JSON 2.0 的 markdown 组件支持标题/表格/代码块/列表语法。
+    实测：带 config.update_multi=false 会被拒（230099/ErrCode 300302
+    "update_multi is false"），省略 config 整段即可发送成功。
     """
     import json
 
     card = {
         "schema": "2.0",
-        "config": {"update_multi": False},
         "body": {
             "elements": [
                 {"tag": "markdown", "content": text},
