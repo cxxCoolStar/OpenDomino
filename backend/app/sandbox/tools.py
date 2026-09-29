@@ -220,6 +220,11 @@ _SCHEMAS: dict[str, dict] = {
 # 危险命令黑名单（fastclaw 同款：整体小写后子串匹配，只防毁灭性命令）
 _DANGEROUS = ("rm -rf /", "mkfs", "dd if=", ":(){:|:&};:", "> /dev/sd")
 
+# 状态变更工具清单（hermes tool_guardrails 同款语义）：此类工具成功后，
+# 失败计数器重置——「改代码 → 重跑测试」是新实验的开始，不是循环的重放。
+# run_command 不入列：跑测试成功不应清零编辑工具的连败（否则掩护重试同样失败的补丁）。
+MUTATING_TOOLS = frozenset({"write_file", "patch_replace", "apply_patch"})
+
 
 # ---- handler 实现（全部经 ctx.executor 执行）----
 # read_file / write_file / patch_replace / apply_patch / grep 五个 handler 接入

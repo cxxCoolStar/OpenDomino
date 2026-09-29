@@ -23,6 +23,11 @@ _LOOP_WARNING = (
     "检测到死循环：同样的工具调用返回了同样的结果。请换一种方法推进任务。"
 )
 
+_LOOP_SOFT_NUDGE = (
+    "提示：上一次调用与本次完全相同且结果相同。如果这是刻意重试可以继续，"
+    "否则请换参数、换工具，或基于已有信息推进。"
+)
+
 _STRIP_TOOLS_NUDGE = (
     "工具连续失败/调用已受限，本轮工具已禁用。请基于已有信息直接给出当前结论"
     "与未竟事项，不要尝试再调用任何工具。"
@@ -126,6 +131,7 @@ def build_system_prompt(task: Task, *, repo_conventions: str = "", skill_catalog
 
 FORCE_SUMMARY_NUDGE = _FORCE_SUMMARY_NUDGE
 LOOP_WARNING = _LOOP_WARNING
+LOOP_SOFT_NUDGE = _LOOP_SOFT_NUDGE
 STRIP_TOOLS_NUDGE = _STRIP_TOOLS_NUDGE
 BUDGET_HALF_NOTICE = _BUDGET_HALF_NOTICE
 BUDGET_HIGH_NOTICE = _BUDGET_HIGH_NOTICE

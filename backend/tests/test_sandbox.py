@@ -85,12 +85,17 @@ def make_task(status: TaskStatus = TaskStatus.PENDING, type_: str = "modify") ->
 def test_guard_same_call_loop():
     g = StepGuard(same_call_limit=3)
     assert g.observe_call("list_dir", {"p": "x"}, "same") is None
-    assert g.observe_call("list_dir", {"p": "x"}, "same") is None
+    assert g.observe_call("list_dir", {"p": "x"}, "same") == "same_call_soft"
     assert g.observe_call("list_dir", {"p": "x"}, "same") == "same_call_loop"
     # 输出变化则不触发
     g2 = StepGuard(same_call_limit=3)
     assert g2.observe_call("run_command", {"c": "pytest"}, "pass") is None
     assert g2.observe_call("run_command", {"c": "pytest"}, "fail") is None
+
+    # limit<3 不设温和档（首轮即提醒会误伤正常重试）
+    g3 = StepGuard(same_call_limit=2)
+    assert g3.observe_call("list_dir", {"p": "x"}, "same") is None
+    assert g3.observe_call("list_dir", {"p": "x"}, "same") == "same_call_loop"
 
 
 def test_guard_tool_fail_streak_and_budget():
@@ -110,6 +115,42 @@ def test_guard_tool_fail_streak_and_budget():
     assert not g3.budget_exhausted
     g3.observe_call("list_dir", {}, "b")
     assert g3.budget_exhausted
+
+
+def test_guard_soft_nudge_fires_before_hard_loop():
+    # 第 2 次同参同果 → 温和提醒；第 3 次 → 硬判定（同 call_limit=3）
+    g = StepGuard(same_call_limit=3)
+    assert g.observe_call("read_file", {"p": "x"}, "same") is None
+    assert g.observe_call("read_file", {"p": "x"}, "same") == "same_call_soft"
+    assert g.observe_call("read_file", {"p": "x"}, "same") == "same_call_loop"
+
+
+def test_guard_mutating_success_resets_fail_streak():
+    # hermes 同款：mutating 工具成功 → 连败清零（edit→re-run 不是失败重放）
+    g = StepGuard(same_tool_fail_limit=2)
+    g.observe_result("patch_replace", failed=True)
+    g.observe_result("patch_replace", failed=True)        # 连败 2，下一刻本该摘
+    g.observe_result("patch_replace", failed=False)       # 但编辑成功了 → 清零
+    assert not g.should_strip_tools
+    g.observe_result("patch_replace", failed=True)        # 新一轮连败从 1 数起
+    assert not g.should_strip_tools
+
+    # run_command 不在 MUTATING_TOOLS：跑测试成功不清零编辑连败，
+    # 否则会掩护模型重试同样失败的补丁
+    g2 = StepGuard(same_tool_fail_limit=2)
+    g2.observe_result("patch_replace", failed=True)
+    g2.observe_result("patch_replace", failed=True)
+    g2.observe_result("run_command", failed=False)
+    assert g2.should_strip_tools
+
+
+def test_guard_readonly_success_keeps_existing_reset_semantics():
+    # 只读工具成功仍只清自己名字的连败（原语义不变；hermes：只有改代码才算新实验）
+    g = StepGuard(same_tool_fail_limit=2)
+    g.observe_result("run_command", failed=True)
+    g.observe_result("read_file", failed=False)
+    g.observe_result("run_command", failed=True)
+    assert g.should_strip_tools       # 读不重置 run_command 连败：两次失败仍连着
 
 
 # ---------- tools：脱敏 / 拦截 / 错误信封 ----------

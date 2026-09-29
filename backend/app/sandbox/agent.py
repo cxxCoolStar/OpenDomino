@@ -18,12 +18,13 @@ from app.sandbox.prompts import (
     BUDGET_HALF_NOTICE,
     BUDGET_HIGH_NOTICE,
     FORCE_SUMMARY_NUDGE,
+    LOOP_SOFT_NUDGE,
     LOOP_WARNING,
     STEER_PREFIX,
     STRIP_TOOLS_NUDGE,
     build_system_prompt,
 )
-from app.sandbox.tools import ToolContext, build_tool_definitions, dispatch_tool
+from app.sandbox.tools import MUTATING_TOOLS, ToolContext, build_tool_definitions, dispatch_tool
 from app.sandbox.types import Task, TaskStage
 
 log = logging.getLogger(__name__)
@@ -69,6 +70,10 @@ class StepGuard:
             self.same_sig_count = 1
         if self.same_sig_count >= self.same_call_limit:
             return "same_call_loop"
+        if self.same_call_limit >= 3 and self.same_sig_count >= self.same_call_limit - 1:
+            # 温和档（hermes 第 3 次才 notice 的前移版）：第 2 次同参同果先提醒，
+            # 给模型在第 3 次硬判定前换方法的机会；limit<3 时不设温和档（会误触发首轮）
+            return "same_call_soft"
         return None
 
     def observe_result(self, name: str, failed: bool) -> None:
@@ -78,6 +83,11 @@ class StepGuard:
             else:
                 self.same_tool_fail_streak = 1
                 self.last_failed_tool = name
+        elif not failed and name in MUTATING_TOOLS:
+            # hermes 同款：mutating 工具成功 → 失败计数清零。「改代码→重跑测试」
+            # 是新实验的开始，不是失败重放，不能把后续同工具重试误判成连败。
+            self.same_tool_fail_streak = 0
+            self.last_failed_tool = ""
         elif name == self.last_failed_tool:
             self.same_tool_fail_streak = 0
             self.last_failed_tool = ""
@@ -222,6 +232,8 @@ class SandboxAgent:
                         await emit("tool_summary", f"{tc.name} {_preview_args(tc.args)}")
                     if verdict == "same_call_loop":
                         messages.append({"role": "user", "content": LOOP_WARNING})
+                    elif verdict == "same_call_soft":
+                        messages.append({"role": "user", "content": LOOP_SOFT_NUDGE})
                 guard.observe_round(all_failed)
 
                 # 历史超长：确定性裁剪旧工具结果（零 LLM 调用）
