@@ -143,10 +143,32 @@ _SCHEMAS: dict[str, dict] = {
             },
         },
     },
+    "patch_replace": {
+        "name": "patch_replace",
+        "description": (
+            "对已有文件做精确文本替换编辑（首选编辑工具）。"
+            "old_string 必须来自最近一次读到的文件内容且在文件中唯一"
+            "（不唯一时报错，此时扩大 old_string 带上更多上下文，或改用 replace_all）；"
+            "编辑前必须先用 read_file 读过该文件；"
+            "编辑已成功落地，无需重读验证；"
+            "同一处编辑失败两次就改用 write_file 整体重写该函数或文件。"
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["path", "old_string", "new_string"],
+            "properties": {
+                "path": {"type": "string", "description": "相对工作区根的文件路径"},
+                "old_string": {"type": "string", "description": "要被替换的原文，须在文件中唯一"},
+                "new_string": {"type": "string", "description": "替换后的文本，与 old_string 相同没有意义；传空串即删除匹配文本"},
+                "replace_all": {"type": "boolean", "description": "为 true 时替换全部出现（默认只替换唯一一处）"},
+            },
+        },
+    },
     "apply_patch": {
         "name": "apply_patch",
         "description": (
-            "对已有文件应用 V4A 格式补丁（不是 unified diff）。格式：\n"
+            "对文件应用 V4A 格式补丁（备选编辑工具，用于一次改动跨多个位置或多个文件）。"
+            "单个位置的局部修改优先用 patch_replace。格式：\n"
             "*** Begin Patch\n"
             "*** Update File: path/to/file.py\n"
             "@@ 上下文提示 @@\n"
@@ -200,8 +222,8 @@ _DANGEROUS = ("rm -rf /", "mkfs", "dd if=", ":(){:|:&};:", "> /dev/sd")
 
 
 # ---- handler 实现（全部经 ctx.executor 执行）----
-# read_file / write_file / apply_patch / grep 四个 handler 接入 hermes
-# ShellFileOperations（vendor，见 _vendor/ + hermes_adapter.py）：
+# read_file / write_file / patch_replace / apply_patch / grep 五个 handler 接入
+# hermes ShellFileOperations（vendor，见 _vendor/ + hermes_adapter.py）：
 # 原子写、模糊补丁、rg→grep 降级搜索、行号分页读，全部是她修过几百个 issue 的实现。
 
 from app.sandbox.hermes_adapter import HermesEnvAdapter  # noqa: E402
@@ -257,6 +279,24 @@ async def _h_write_file(args: dict, ctx: ToolContext) -> str:
     return _wrap(f"ok: wrote {args['path']} ({len(args['content'])} chars)")
 
 
+async def _h_patch_replace(args: dict, ctx: ToolContext) -> str:
+    ops = _get_file_ops(ctx)
+    r = await asyncio.to_thread(
+        ops.patch_replace,
+        args["path"],
+        args["old_string"],
+        args["new_string"],
+        bool(args.get("replace_all", False)),
+    )
+    if r.error:
+        return _err(r.error)
+    if r.no_change:
+        # hermes 的 already-applied 检测：重复投递已落地的编辑时不再报错，
+        # 让模型直接继续而不是重读重补
+        return _wrap(f"ok: edit already applied to {args['path']} (no change needed)")
+    return _wrap(f"ok: edited {args['path']} ({len(r.files_modified)} file(s) modified)")
+
+
 async def _h_apply_patch(args: dict, ctx: ToolContext) -> str:
     ops = _get_file_ops(ctx)
     r = await asyncio.to_thread(ops.patch_v4a, args["diff"])
@@ -286,6 +326,7 @@ _HANDLERS = {
     "read_file": _h_read_file,
     "grep": _h_grep,
     "write_file": _h_write_file,
+    "patch_replace": _h_patch_replace,
     "apply_patch": _h_apply_patch,
     "run_command": _h_run_command,
     "git_diff": _h_git_diff,

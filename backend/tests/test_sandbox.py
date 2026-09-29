@@ -145,8 +145,123 @@ async def test_dispatch_and_sanitize(monkeypatch):
     assert "error" in unknown
 
     names = {d["function"]["name"] for d in build_tool_definitions()}
-    assert {"list_dir", "read_file", "grep", "write_file", "apply_patch",
-            "run_command", "git_diff", "git_log"} <= names
+    assert {"list_dir", "read_file", "grep", "write_file", "patch_replace",
+            "apply_patch", "run_command", "git_diff", "git_log"} <= names
+
+
+# ---------- patch_replace：真实 vendor 栈 + 本地 sh 的 E2E ----------
+# 走 dispatch_tool → ShellFileOperations（vendor）→ HermesEnvAdapter → 本地 sh，
+# 与容器内只差 Executor 实现；这是 E2E 测试（AGENTS.md 测试策略），不做 mock。
+
+
+class LocalShExecutor:
+    """把命令交给本地 sh 在临时目录执行，输出契约与 DockerExecutor 一致（尾部 [exit N]）。"""
+
+    def __init__(self, root) -> None:
+        import subprocess
+
+        self._sp = subprocess
+        self.root = root
+
+    async def exec(self, command: str, *, timeout: float | None = None, workdir: str | None = None) -> str:
+        r = await asyncio.to_thread(
+            self._sp.run, ["sh", "-c", command],
+            capture_output=True, text=True, cwd=str(self.root),
+        )
+        out = r.stdout + (f"[stderr]\n{r.stderr}" if r.stderr else "")
+        if r.returncode not in (0, None):
+            out = f"{out}\n[exit {r.returncode}]" if out else f"[exit {r.returncode}]"
+        return out
+
+    async def read_file(self, path: str) -> str:
+        return (self.root / path).read_text(encoding="utf-8")
+
+    async def write_file(self, path: str, content: str) -> None:
+        (self.root / path).write_text(content, encoding="utf-8")
+
+    async def list_dir(self, path: str = ".") -> list[dict]:
+        return []
+
+
+@pytest.fixture
+def ws_root(tmp_path):
+    (tmp_path / "demo.py").write_text(
+        "def ping():\n    return 1\n\ndef pong():\n    return 1\n", encoding="utf-8")
+    return tmp_path
+
+
+def _dispatch_patch_replace(ctx, **args):
+    """dispatch 并回传输出。成功是纯文本（write_file 同款约定），错误才是 JSON 信封。"""
+    return dispatch_tool("patch_replace", args, ctx)
+
+
+def _err_of(raw: str) -> str | None:
+    """按 _is_failed_result 同款约定取错误文本：JSON 信封带 error 才算失败。"""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return data.get("error") if isinstance(data, dict) else None
+
+
+@pytest.mark.asyncio
+async def test_patch_replace_edits_file(ws_root):
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await _dispatch_patch_replace(
+        ctx, path="demo.py",
+        old_string="def ping():\n    return 1",
+        new_string="def ping():\n    return 42")
+    assert _err_of(out) is None
+    assert "return 42" in (ws_root / "demo.py").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_patch_replace_missing_string_errors(ws_root):
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await _dispatch_patch_replace(
+        ctx, path="demo.py", old_string="no-such-line", new_string="x")
+    assert "Could not find a match" in _err_of(out)
+
+
+@pytest.mark.asyncio
+async def test_patch_replace_ambiguous_requires_replace_all(ws_root):
+    # demo.py 里 "return 1" 出现两次：不唯一且未开 replace_all → 报错（错误里带行号提示）
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await _dispatch_patch_replace(
+        ctx, path="demo.py", old_string="return 1", new_string="return 2")
+    assert "2 matches" in _err_of(out)
+
+
+@pytest.mark.asyncio
+async def test_patch_replace_already_applied_is_noop_success(ws_root):
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    # old_string == new_string 且文件已含该文本 → hermes already-applied 检测：
+    # 成功形响应且不改文件，模型不必重读重试
+    out = await _dispatch_patch_replace(
+        ctx, path="demo.py",
+        old_string="def ping():\n    return 1",
+        new_string="def ping():\n    return 1")
+    assert _err_of(out) is None
+    assert "already applied" in out
+    assert "return 1" in (ws_root / "demo.py").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_patch_replace_replace_all_hits_all_occurrences(ws_root):
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await _dispatch_patch_replace(
+        ctx, path="demo.py", old_string="return 1", new_string="return 2",
+        replace_all=True)
+    assert _err_of(out) is None
+    assert (ws_root / "demo.py").read_text(encoding="utf-8").count("return 2") == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_replace_missing_file_errors(ws_root):
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await _dispatch_patch_replace(
+        ctx, path="absent.py", old_string="a", new_string="b")
+    assert _err_of(out)
 
 
 def test_failed_result_envelope():
