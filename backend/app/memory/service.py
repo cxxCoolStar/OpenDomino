@@ -315,6 +315,33 @@ class SQLiteMemoryService:
                 hits.append(_hit(r))
         return hits[:limit]
 
+    async def filter_confirmed_by_repo(self, repo: str, *, limit: int = 20) -> list[MemoryHit]:
+        """确定性过滤：statement/title 含仓库名的 confirmed 条目（Phase B 冲突检测兜底）。
+
+        召回是概率性的，语义措辞差异可能漏掉同仓库的旧条目；本方法按子串匹配
+        保证「带仓库限定语的旧条目」被看到，不依赖 embedding 与相似度。
+        """
+        name = (repo or "").strip()
+        if not name:
+            return []
+        async with self._session() as s:
+            rows = (
+                await s.execute(
+                    select(MemoryRow).where(
+                        MemoryRow.status == MemoryStatus.CONFIRMED.value,
+                        (MemoryRow.statement + "\n" + MemoryRow.title).like(f"%{name}%"),
+                    )
+                )
+            ).scalars().all()
+        return [
+            MemoryHit(
+                id=r.id, title=r.title, statement=r.statement,
+                memory_type=r.memory_type, rationale=r.rationale,
+                score=1.0, status=MemoryStatus.CONFIRMED,
+            )
+            for r in rows[:limit]
+        ]
+
     async def create_memory_draft(self, draft: MemoryDraft) -> str:
         mid = str(uuid.uuid4())
         async with self._session() as s:

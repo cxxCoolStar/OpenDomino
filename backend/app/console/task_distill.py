@@ -138,9 +138,10 @@ class TaskDistiller:
                 await self._memory.delete_memory(old_id)
             session.pending_memory = None
 
+        kbase_context = await self._kbase_context(repo, outcome)
         user_content = self._build_user_content(
             repo=repo, task_type=task_type, instruction=instruction,
-            outcome=outcome, diff_stat=diff_stat,
+            outcome=outcome, diff_stat=diff_stat, kbase_context=kbase_context,
         )
         model = settings.console_summary_model or None
         raw = await self._llm.complete(_TASK_DISTILL_SYSTEM, user_content, model=model)
@@ -198,9 +199,39 @@ class TaskDistiller:
                 f"（{settings.memory_confirm_ttl_minutes} 分钟内有效）。",
             )
 
+    async def _kbase_context(self, repo: str, outcome: str) -> str:
+        """现有 KBase 条目上下文：召回 + 仓库名确定性过滤双层互补。
+
+        召回层（recall_kbase 三级递进）是概率性的，语义措辞差异可能漏掉真正
+        冲突的旧条目；确定性层按仓库名子串匹配 confirmed 条目兜底——Phase B
+        提示词要求 statement 写明仓库限定语，带仓库名的旧条目保证被看到。
+        两层合并去重（上限 kbase_full_load_threshold 条），仍非穷尽，人审确认
+        流是最终防线（ADR-002 已知局限）。
+        """
+        query = outcome[-500:]
+        recalled: dict[str, object] = {}
+        try:
+            for h in await self._memory.recall_kbase(query, limit=settings.kbase_full_load_threshold):
+                recalled[h.id] = h
+        except Exception:  # noqa: BLE001 —— 召回失败不阻塞提炼
+            log.exception("kbase recall for task distill failed")
+
+        try:
+            extra = await self._memory.filter_confirmed_by_repo(repo, limit=settings.kbase_full_load_threshold)
+        except Exception:  # noqa: BLE001
+            log.exception("repo filter for task distill failed")
+            extra = []
+        for h in extra:
+            recalled.setdefault(h.id, h)
+
+        if not recalled:
+            return ""
+        lines = [f"- [{h.id[:8]}] {h.title}：{h.statement}" for h in recalled.values()]
+        return "\n".join(lines)
+
     @staticmethod
     def _build_user_content(*, repo: str, task_type: str, instruction: str,
-                            outcome: str, diff_stat: str) -> str:
+                            outcome: str, diff_stat: str, kbase_context: str = "") -> str:
         kind = "代码变更" if task_type == "modify" else "排查"
         parts = [
             "【任务信息】",
@@ -212,4 +243,6 @@ class TaskDistiller:
             parts += ["", "【执行产出】", outcome]
         if diff_stat:
             parts += ["", "【改动统计】", diff_stat]
+        if kbase_context:
+            parts += ["", "【现有团队记忆】", kbase_context]
         return "\n".join(parts)

@@ -212,6 +212,53 @@ async def main() -> int:
                       not r5["replies"] and (await memory.load_session("c-phaseb")).pending_memory is None,
                       "无回复、槽位空")
 
+    # ---- case 6: 冲突替代（supersedes 贯通）----
+    # 先造一条旧 confirmed 记忆；再让任务产出与之冲突的结论，模型返回 supersedes_id。
+    # 验证：LLM 输入含【现有团队记忆】（双层 KBase 上下文生效）→ 提议带替代提示 →
+    # 确认后新条目 confirmed、旧条目 archived。
+    from app.memory.types import MemoryDraft as _MD
+    old_mem = await memory.create_memory_draft(_MD(
+        title="shop-service 重试机制", statement="shop-service 重试统一用固定间隔 sleep 3 次。"))
+    await memory.confirm_memory(old_mem, "u1")
+
+    class SupersedeLLM(FakeDistillLLM):
+        async def complete(self, system: str, user: str, *, model=None) -> str:
+            assert "【现有团队记忆】" in user and "固定间隔 sleep" in user, "LLM 未看到旧记忆（双层上下文失效）"
+            self.calls.append(user)
+            return json.dumps({
+                "distilled": True,
+                "title": "shop-service 重试机制",
+                "statement": "shop-service 重试需求应复用 infra/schedule 包的 TaskScheduler 指数退避，早期固定间隔 sleep 方案已废弃。",
+                "rationale": "新任务实施结论，替代旧的固定间隔方案",
+                "memory_type": "convention",
+                "keywords": ["shop-service", "重试"],
+                "supersedes_id": old_mem,
+            }, ensure_ascii=False)
+
+    sup_llm = SupersedeLLM()
+    r6 = await run_case("supersede", (memory, replies, locks), sup_llm,
+                        PENDING_TASK_INSTRUCTION, MODIFY_OUTCOME, "modify", "task-super-0001")
+    pm6 = (await memory.load_session("c-phaseb")).pending_memory
+    all_ok &= _record("supersede: LLM 看到旧记忆并提议",
+                      any("替代一条旧记忆" in t for _, t in r6["replies"]) and pm6 is not None,
+                      f"replies={len(r6['replies'])} 条")
+    if pm6:
+        new_id = pm6.payload["memory_id"]
+        await agent.handle(make_msg("确认", "c-phaseb", message_id="confirm-2"))
+        new_hit = await memory.get_memory(new_id)
+        old_row = await memory.get_memory(old_mem)
+        all_ok &= _record("supersede: 新条目入库",
+                          new_hit is not None and new_hit.status == MemoryStatus.CONFIRMED,
+                          f"new={new_hit.status if new_hit else None}")
+        # 旧条目转 archived：recall_kbase 只回 confirmed，查不到即已归档
+        from app.memory.service import MemoryRow as _MR, MemoryStatus as _MS
+        archived = False
+        async with memory._session() as s:
+            from sqlalchemy import select as _select
+            row = (await s.execute(_select(_MR).where(_MR.id == old_mem))).scalars().first()
+            archived = row is not None and row.status == _MS.ARCHIVED.value
+        all_ok &= _record("supersede: 旧条目归档", archived, f"old_status={archived}")
+
     # ---- 落库统计（source_type=task 全链路核对）----
     task_memories = []
     for hit in await memory.recall_kbase("shop-service", limit=20):

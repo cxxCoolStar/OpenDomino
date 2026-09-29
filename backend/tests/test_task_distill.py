@@ -130,3 +130,67 @@ async def test_user_content_contains_instruction_outcome_diffstat():
     )
     assert "需求文本" in content and "执行汇总" in content and "提交数 2" in content
     assert "代码变更" in content
+
+
+# ---- 冲突检测：双层 KBase 上下文（2026-09-29 补强）----
+
+@pytest.mark.asyncio
+async def test_filter_confirmed_by_repo_substring(tmp_path):
+    mem = SQLiteMemoryService(db_url=f"sqlite+aiosqlite:///{tmp_path}/t.db")
+    await mem.init()
+    hit_a = await mem.create_memory_draft(MemoryDraft(title="a", statement="shop-service 重试复用 TaskScheduler"))
+    await mem.confirm_memory(hit_a, "u1")
+    hit_b = await mem.create_memory_draft(MemoryDraft(title="b", statement="另一个仓库的经验 billing"))
+    await mem.confirm_memory(hit_b, "u1")
+
+    hits = await mem.filter_confirmed_by_repo("shop-service")
+    assert [h.id for h in hits] == [hit_a]          # 只命中带仓库名的条目
+    assert await mem.filter_confirmed_by_repo("") == []  # 空仓库名安全返回
+
+
+@pytest.mark.asyncio
+async def test_kbase_context_merges_recall_and_repo_filter(env):
+    mem, _, _ = env
+    old = await mem.create_memory_draft(MemoryDraft(title="旧约定", statement="shop-service 重试要复用 TaskScheduler"))
+    await mem.confirm_memory(old, "u1")
+    d = TaskDistiller(mem, FakeLLM(PROPOSAL))
+    ctx = await d._kbase_context("shop-service", outcome="本次产出文本")
+    assert f"[{old[:8]}]" in ctx and "TaskScheduler" in ctx
+
+
+@pytest.mark.asyncio
+async def test_user_content_includes_kbase_and_llm_sees_it(env):
+    mem, replies, reply = env
+    old = await mem.create_memory_draft(MemoryDraft(title="旧", statement="shop-service 既有结论"))
+    await mem.confirm_memory(old, "u1")
+    llm = FakeLLM(PROPOSAL)
+    d = TaskDistiller(mem, llm, reply=reply)
+    await d._distill(task_id="t9", chat_id="c1", repo="shop-service",
+                     task_type="modify", instruction="i", outcome="o", diff_stat="")
+    assert "【现有团队记忆】" in llm.calls[0] and "既有结论" in llm.calls[0]
+
+
+@pytest.mark.asyncio
+async def test_supersedes_flows_through_proposal(env):
+    """模型给出 supersedes_id 时：草稿携带，确认后旧条目转 archived。"""
+    mem, replies, reply = env
+    old = await mem.create_memory_draft(MemoryDraft(title="旧", statement="旧结论"))
+    await mem.confirm_memory(old, "u1")
+    proposal = json.dumps({
+        "distilled": True, "title": "新", "statement": "shop-service 新结论",
+        "memory_type": "convention", "keywords": [], "supersedes_id": old,
+    }, ensure_ascii=False)
+    d = TaskDistiller(mem, FakeLLM(proposal), reply=reply)
+    await d._distill(task_id="t10", chat_id="c1", repo="shop-service",
+                     task_type="modify", instruction="i", outcome="o", diff_stat="")
+    sess = await mem.load_session("c1")
+    new_id = sess.pending_memory.payload["memory_id"]
+    assert "替代一条旧记忆" in replies[0]
+    await mem.confirm_memory(new_id, "u1")
+    new_hit = await mem.get_memory(new_id)
+    assert new_hit.status == MemoryStatus.CONFIRMED
+    # 旧条目已归档（通过 confirm_memory 的 supersedes 语义验证）
+    async with mem._session() as s:
+        from app.memory.service import MemoryRow, MemoryStatus as MS
+        row = await s.get(MemoryRow, old)
+        assert row.status == MS.ARCHIVED.value

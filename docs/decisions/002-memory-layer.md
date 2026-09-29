@@ -390,6 +390,25 @@ modify 与 investigate 两个 DONE 分支（`_submit_task_distill`）。
 - 时序：提炼在任务交付回传之后 fire-and-forget 异步执行，LLM 失败只记日志，
   绝不影响任务交付消息；开关 `task_distill_enabled`（默认开）。
 
+### 冲突检测：双层 KBase 上下文与已知局限
+
+提炼时把「现有团队记忆」注入 LLM 输入，模型识别到冲突则在草稿上标 supersedes_id，
+确认后旧条目转 archived（替代归档，非原地修改，保留审计链）。注入分两层互补：
+
+- 召回层：`recall_kbase` 三级递进（当前 confirmed ≤ 阈值时全量注入，召回环节消失）；
+- 确定性层：`filter_confirmed_by_repo` 按仓库名子串匹配 confirmed 条目兜底——
+  Phase B 提示词要求 statement 写明仓库限定语，带仓库名的旧条目保证被看到，
+  不依赖 embedding 与语义相似度。
+
+**已知局限（非穷尽检测，人审确认流是最终防线）**：
+
+- 旧条目未写仓库名时确定性层失效（早期手工沉淀条目可能不规范）；
+- 超过全量阈值后召回层是概率性的，语义措辞差异可能漏召真正冲突的条目；
+- LLM 识别矛盾与填对 supersedes_id 两步判断均可能出错，漏判的结果是新旧两条
+  confirmed 并存（不损坏数据，后续提炼仍可再触发替代）；
+- supersedes 仅支持 1:1，一次新结论同时推翻多条旧记忆时只替代一条（ADR-009
+  单提议上限的既有设计）。
+
 ## 统一接口边界
 
 ConsoleAgent 依赖抽象接口，不直接依赖 ChromaDB、SQLite 或具体文档解析器：
