@@ -164,12 +164,23 @@ REPO_{NAME}_TEST_CMD=pytest -x -q
 | 工具 | 说明 |
 |---|---|
 | `list_dir` / `read_file` / `grep` | 仓库探索，输出截断，read_file 二进制嗅探拒绝 |
-| `write_file` / `apply_patch` | 文件编辑（整体写 / 差量补丁） |
+| `patch_replace` | 精确文本替换编辑（局部修改首选）：模糊匹配容错、already-applied 检测（重复投递已落地编辑返回成功形 no-op）、编辑后自动 lint |
+| `apply_patch` | V4A 格式补丁（备选）：改动跨多个位置或多个文件时使用 |
+| `write_file` | 整体写（新建文件或放弃增量修补时重写） |
 | `run_command` | 容器内 bash，真超时进程组击杀 + 输出截断 |
 | `git_diff` / `git_log` | 查看改动与提交历史 |
 | `load_skill` | 按需读 SKILL 全文（ADR-005 方式一） |
 
 所有工具经容器 exec 执行，宿主侧只做协议驱动与护栏检查；遵循 ADR-006 ToolProvider 协议。
+
+### 编辑格式按模型族选择
+
+编辑工具以 str_replace（`patch_replace`）为主、V4A 补丁（`apply_patch`）为备，
+依据 hermes 实测结论：GPT/Codex 系模型经 RL 训练可靠产出 V4A diff，
+而 Anthropic 与多数开源权重模型在 str_replace 编辑器上 RL——沙箱模型
+GLM 属后者，主编辑通道应为 search/replace。工具使用教训（唯一性约束、
+先读后改、编辑成功勿重读验证、失败两次改整体重写）写入工具 description，
+系统提示词只留通用纪律，避免同一教训两处重复。
 
 ## 资源与安全边界
 
@@ -182,7 +193,21 @@ REPO_{NAME}_TEST_CMD=pytest -x -q
 | TASK_MAX_CONCURRENCY | 2 | 全局并发任务数 |
 | VERIFY_MAX_RETRIES | 2 | AI 验证 blocked 后回炉次数 |
 | CONTAINER_IDLE_TTL_MIN | 10 | 容器空闲驱逐时间 |
-| LOOP_SAME_CALL_LIMIT | 3 | 反死循环：同调用重复上限 |
+| LOOP_SAME_CALL_LIMIT | 3 | 反死循环：同参同果第 2 次温和提醒、第 3 次摘工具（详见下文护栏三档） |
+
+### 反死循环护栏三档
+
+死循环防御分三档递进（hermes tool_guardrails 分层防御同款思路）：
+第一档，同一调用（工具 + 参数 + 输出）第 2 次重复时在消息中注入温和提醒，
+容许刻意重试，给模型换方法的机会；第二档，第 3 次重复时摘除工具并注入
+强提醒；第三档，同工具连败 ≥2 或整轮全败 ≥3 时摘工具，预算耗尽触发
+无工具强制汇总保底交付。`LOOP_SAME_CALL_LIMIT < 3` 时不设温和档，
+避免首轮误触发。
+
+配套语义：mutating 工具（`write_file` / `patch_replace` / `apply_patch`）
+成功后重置同工具连败计数——「改代码 → 重跑」是新实验的开始而非失败重放；
+`run_command` 刻意不入列，跑测试成功不得清零编辑工具连败，否则会掩护
+模型重试同样失败的补丁。只读工具成功仍只清自己名字的连败。
 
 安全防护：
 
@@ -263,4 +288,8 @@ REPO_{NAME}_URL / _IMAGE / _SETUP_CMD / _TEST_CMD
   `internal/sandbox/lifecycle.go`（懒创建/驱逐/snapshot）、
   `internal/agent/loop.go`（ReAct loop、强制汇总、反死循环、真超时）、
   `internal/agent/tools/exec.go`（危险命令黑名单、env 不继承）。
+- hermes：`tools/tool_guardrails.py`（反死循环分层防御：温和提醒 → block →
+  强停；mutating 工具成功重置失败计数）、`agent/coding_context.py`
+  （按模型族选编辑格式：GPT/Codex 系用 V4A，开源权重模型用 str_replace）、
+  `agent/prompt_builder.py`（任务完成纪律：交付物须有真实工具输出背书）。
 - ADR-002 / ADR-003 / ADR-005 / ADR-006 / ADR-007。
