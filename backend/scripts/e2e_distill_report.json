@@ -1,0 +1,133 @@
+{
+  "adr": "ADR-009 旁听结论蒸馏",
+  "ts": "2026-09-28 18:30:35",
+  "passed": 25,
+  "failed": 0,
+  "cases": [
+    {
+      "name": "1. 首见初始化：存量消息不计入未蒸馏",
+      "ok": true,
+      "detail": "undistilled=0"
+    },
+    {
+      "name": "2. 空闲触发：LLM 被调用且提议写入槽位",
+      "ok": true,
+      "detail": "calls=1 replies=1"
+    },
+    {
+      "name": "2. 空闲触发：pending_memory 就绪且 source=overheard",
+      "ok": true,
+      "detail": "pending=PendingState(kind='memory_confirm', payload={'memory_id': '38b73db9-e1a3-4482-a237-e3337c86c04e', 'source': 'overheard', 'watermark_ts': 1790590772.8441973}, created_at=1790591432.8730774)"
+    },
+    {
+      "name": "2. 空闲触发：水位线未提前推进",
+      "ok": true,
+      "detail": "wm=1789900232.768703 vs init=1789900232.768703"
+    },
+    {
+      "name": "2. 空闲触发：提议消息带确认提示",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "4a. 确认：消费消息、条目 confirmed、水位线推进",
+      "ok": true,
+      "detail": "consumed=True wm=1790591433.737289"
+    },
+    {
+      "name": "4a. 确认：条目状态为 confirmed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "4b. 取消：水位线推进且草稿物理删除",
+      "ok": true,
+      "detail": "consumed=True wm=1790591483.7590795 hit2=None"
+    },
+    {
+      "name": "4c. 过期：草稿物理删除、水位线不动",
+      "ok": true,
+      "detail": "consumed=False hit3=None wm=1790591483.7590795"
+    },
+    {
+      "name": "5. supersedes 前旧条目可召回",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "5. supersedes 后：旧条目 archived、新条目 confirmed",
+      "ok": true,
+      "detail": "old=MemoryStatus.ARCHIVED new=MemoryStatus.CONFIRMED"
+    },
+    {
+      "name": "5. supersedes 后召回不再命中旧条目",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "5. 替代已归档条目：按普通新条目确认，无异常",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "6. prune：水位线之前的过期消息被清、之后的保留",
+      "ok": true,
+      "detail": "deleted=1 remaining=['新消息未蒸']"
+    },
+    {
+      "name": "6. prune：水位线之后的超龄消息保留（不静默丢数据）",
+      "ok": true,
+      "detail": "deleted=0 remaining=1"
+    },
+    {
+      "name": "6. prune：无水位线记录的群不清理",
+      "ok": true,
+      "detail": "deleted=0 remaining=1"
+    },
+    {
+      "name": "7. 冷却：成功提议后进入成功冷却（不再调用）",
+      "ok": true,
+      "detail": "calls=1"
+    },
+    {
+      "name": "7. 冷却：成功提议后水位线未推进",
+      "ok": true,
+      "detail": "wm=1790590234.9512553"
+    },
+    {
+      "name": "8. 槽位占用：人工提议未决时蒸馏跳过",
+      "ok": true,
+      "detail": "calls=1"
+    },
+    {
+      "name": "10. 无可沉淀：无提议且水位线推进（消息全清）",
+      "ok": true,
+      "detail": "calls=2 undistilled=0 replies=1"
+    },
+    {
+      "name": "9. 单提议上限：多条候选只产出一条提议",
+      "ok": true,
+      "detail": "pending=PendingState(kind='memory_confirm', payload={'memory_id': '5bbbd79d-b8ae-4284-a1c0-c8473855acec', 'source': 'overheard', 'watermark_ts': 1790590775.102769}, created_at=1790591435.126133)"
+    },
+    {
+      "name": "3. 写前校验：讨论恢复后结果作废、水位线不动、无提议",
+      "ok": true,
+      "detail": "calls=1 wm=1790590235.1376727 pending=None"
+    },
+    {
+      "name": "7. 失败冷却：失败后水位线不动",
+      "ok": true,
+      "detail": "wm=1790590235.1767254"
+    },
+    {
+      "name": "7. 失败冷却：30 分钟内不重试",
+      "ok": true,
+      "detail": "calls=1"
+    },
+    {
+      "name": "7. 失败冷却：冷却过期后恢复蒸馏",
+      "ok": true,
+      "detail": "calls=2 wm=1790590775.1873467"
+    }
+  ]
+}

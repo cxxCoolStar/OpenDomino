@@ -42,6 +42,12 @@ class ConsoleAgent:
             self._locks[chat_id] = asyncio.Lock()
         return self._locks[chat_id]
 
+    # ---- 蒸馏服务协作面（ADR-009）----
+
+    def chat_locks(self) -> dict[str, asyncio.Lock]:
+        """per-chat 锁注册表：蒸馏写 Session 与消息管线共用同一把锁。"""
+        return self._locks
+
     async def handle(self, msg: UnifiedMessage) -> None:
         lock = self._lock(msg.chat_id)
         if lock.locked():
@@ -118,6 +124,8 @@ class ConsoleAgent:
             reply_text = decision.clarify_question
         elif decision.action == Action.DELEGATE:
             reply_text = await self._do_delegate(session, msg, decision)
+        elif decision.action == Action.REPO_OP:
+            reply_text = await self._do_repo_op(msg, decision)
 
         # 纠正提炼（Phase A）：用户纠正 → 自动建草稿进入确认流（复用 Phase 0 状态机）
         if (
@@ -206,6 +214,45 @@ class ConsoleAgent:
         session.active_task_ids.append(task_id)
         suffix = f"（仓库：{repo.name}）" if repo else ""
         return f"已受理，任务 #{task_id[:8]}：{draft['title']}{suffix}。完成后我会在群里同步。"
+
+    # ---- 仓库管理意图执行（ADR-008 repo_op：LLM 识别，代码确定性执行）----
+
+    async def _do_repo_op(self, msg: UnifiedMessage, decision) -> str:
+        """LLM 识别出的仓库管理意图，参数校验后确定性执行，回复带撤销提示。"""
+        op = decision.repo_op
+        if op is None or not op.op:
+            return "你是要对本群的仓库做什么操作？可以「绑定仓库 名字: git地址」或「查看仓库」。"
+        name = (op.name or "").strip()
+        if op.op == "list":
+            repos = await self._memory.list_repo_bindings(msg.chat_id)
+            if not repos:
+                return "本群还没有绑定仓库。可以直接发「绑定 仓库名 git地址」或仓库地址给我。"
+            lines = [f"- **{r.name}**：{r.url}" for r in repos]
+            return "本群已绑定仓库：\n" + "\n".join(lines)
+        if not name:
+            return "我理解为要管理仓库，但缺少仓库名。请告诉我要操作哪个仓库？"
+        if op.op == "bind":
+            url = (op.url or "").strip()
+            if not url:
+                return f"要绑定仓库 [{name}]，还需要 git 地址（https://…）。"
+            if not url.startswith("http"):
+                return f"仓库地址 [{url}] 不像 git URL，请确认后再试（形如 https://github.com/org/repo.git）。"
+            repo = await self._memory.bind_repo(
+                msg.chat_id, name, url, test_cmd=op.test_cmd, bound_by=msg.user_id
+            )
+            log.info("repo bound via repo_op: chat=%s repo=%s by=%s", msg.chat_id, repo.name, msg.user_id)
+            cmd_part = f"\n测试命令：{op.test_cmd}" if op.test_cmd else ""
+            return (
+                f"🔗 已绑定仓库 [{repo.name}] → {url}{cmd_part}\n"
+                f"现在可以说「帮我到 {repo.name} 仓库排查/修改…」了。绑错了可回复「解绑 {repo.name}」撤销。"
+            )
+        if op.op == "unbind":
+            ok = await self._memory.unbind_repo(msg.chat_id, name)
+            if not ok:
+                return f"本群没有绑定名为 [{name}] 的仓库。"
+            log.info("repo unbound via repo_op: chat=%s repo=%s by=%s", msg.chat_id, name, msg.user_id)
+            return f"已解绑仓库 [{name}]（仓库档案保留，可随时重新绑定）。"
+        return f"还不支持「{op.op}」这个仓库操作，目前可以绑定、解绑、查看。"
 
     # ---- 仓库绑定指令（确定性解析，ADR-003 群仓库绑定的运行时入口）----
     _REPO_BIND_RE = re.compile(

@@ -30,6 +30,7 @@ from app.memory.embedding import (
 )
 from app.memory.types import (
     ChatMessage,
+    DistillState,
     KnowledgeHit,
     MemoryDraft,
     MemoryHit,
@@ -70,6 +71,9 @@ class MemoryRow(Base):
     status: Mapped[str] = mapped_column(String(32), default=MemoryStatus.PENDING.value)
     source_session_id: Mapped[str] = mapped_column(String(64), default="")
     source_task_id: Mapped[str] = mapped_column(String(64), default="")
+    supersedes_id: Mapped[str] = mapped_column(String(64), default="")   # ADR-009：替代的旧条目
+    source_type: Mapped[str] = mapped_column(String(32), default="")     # manual | correction | overheard
+    source_chat_id: Mapped[str] = mapped_column(String(128), default="") # 来源群（overheard 溯源）
     created_by: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[float] = mapped_column(Float, default=0.0)
     updated_at: Mapped[float] = mapped_column(Float, default=0.0)
@@ -106,6 +110,7 @@ class ObservedMessageRow(Base):
     """旁听消息（ADR-008）：非 @ 群消息与回拉历史，全量落库、存而不检索。
 
     message_id 主键天然幂等——通道去重集合重启丢失后，回拉/重放靠 INSERT OR REPLACE 兜底。
+    received_at 为本地接收时间（ADR-009 蒸馏空闲判定与写前校验用，与飞书消息时间戳解耦）。
     """
 
     __tablename__ = "observed_messages"
@@ -116,6 +121,18 @@ class ObservedMessageRow(Base):
     user_name: Mapped[str] = mapped_column(String(128), default="")
     text: Mapped[str] = mapped_column(Text, default="")
     timestamp: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    received_at: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class DistillStateRow(Base):
+    """旁听蒸馏游标（ADR-009）：per-chat 水位线与冷却锚点。"""
+
+    __tablename__ = "distill_state"
+
+    chat_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    watermark_ts: Mapped[float] = mapped_column(Float, default=0.0)
+    last_success_at: Mapped[float] = mapped_column(Float, default=0.0)
+    last_failure_at: Mapped[float] = mapped_column(Float, default=0.0)
 
 
 def _parse_keywords(keywords_json: str) -> list[str]:
@@ -164,10 +181,14 @@ class SQLiteMemoryService:
     async def init(self) -> None:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            # create_all 不给已有表加列；轻量迁移补齐 Phase 0 新增列
+            # create_all 不给已有表加列；轻量迁移补齐新增列（ADR-009）
             for ddl in (
                 "ALTER TABLE sessions ADD COLUMN pending_memory_json Text DEFAULT ''",
                 "ALTER TABLE sessions ADD COLUMN summary Text DEFAULT ''",
+                "ALTER TABLE observed_messages ADD COLUMN received_at Float DEFAULT 0",
+                "ALTER TABLE kbase_memories ADD COLUMN supersedes_id String(64) DEFAULT ''",
+                "ALTER TABLE kbase_memories ADD COLUMN source_type String(32) DEFAULT ''",
+                "ALTER TABLE kbase_memories ADD COLUMN source_chat_id String(128) DEFAULT ''",
             ):
                 try:
                     await conn.exec_driver_sql(ddl)
@@ -298,6 +319,9 @@ class SQLiteMemoryService:
                     status=MemoryStatus.PENDING.value,
                     source_session_id=draft.source_session_id,
                     source_task_id=draft.source_task_id,
+                    supersedes_id=draft.supersedes_id,
+                    source_type=draft.source_type,
+                    source_chat_id=draft.source_chat_id,
                     created_at=time.time(), updated_at=time.time(),
                 )
             )
@@ -305,12 +329,25 @@ class SQLiteMemoryService:
         return mid
 
     async def confirm_memory(self, memory_id: str, actor_id: str) -> None:
+        """确认条目；带 supersedes_id 时将旧条目转 archived（ADR-009 过时内容处理）。
+
+        旧条目缺失或已非 confirmed 时丢弃替代关系按普通新条目处理（ADR-009 决议）。
+        """
         async with self._session() as s:
             row = await s.get(MemoryRow, memory_id)
             if row is not None:
                 row.status = MemoryStatus.CONFIRMED.value
                 row.created_by = actor_id
                 row.updated_at = time.time()
+                if row.supersedes_id:
+                    old = await s.get(MemoryRow, row.supersedes_id)
+                    if old is not None and old.status == MemoryStatus.CONFIRMED.value:
+                        old.status = MemoryStatus.ARCHIVED.value
+                        old.updated_at = time.time()
+                        # 替代生效后清空指向，避免重复归档语义
+                        row.supersedes_id = ""
+                    else:
+                        row.supersedes_id = ""
                 await s.commit()
         await self._index_memory_vector(memory_id)
 
@@ -344,6 +381,20 @@ class SQLiteMemoryService:
                 memory_type=r.memory_type, rationale=r.rationale,
                 status=MemoryStatus(r.status),
             )
+
+    async def get_memory_full(self, memory_id: str) -> dict | None:
+        """蒸馏用：取条目完整字段（含 supersedes_id / source），供 LLM 比对冲突。"""
+        async with self._session() as s:
+            r = await s.get(MemoryRow, memory_id)
+            if r is None:
+                return None
+            return {
+                "id": r.id, "title": r.title, "statement": r.statement,
+                "memory_type": r.memory_type, "rationale": r.rationale,
+                "keywords": _parse_keywords(r.keywords_json),
+                "status": r.status, "supersedes_id": r.supersedes_id,
+                "source_type": r.source_type, "source_chat_id": r.source_chat_id,
+            }
 
     async def delete_memory(self, memory_id: str) -> bool:
         """条目级 remove（ADR-002 写入治理）。拒绝/过期的 pending 草稿物理删除。"""
@@ -452,8 +503,12 @@ class SQLiteMemoryService:
     # ---- 旁听缓冲（ADR-008）----
 
     async def save_observed(self, chat_id: str, messages: list[ChatMessage]) -> int:
-        """批量落旁听消息，按 message_id 幂等（已存在的跳过）。返回新增条数。"""
+        """批量落旁听消息，按 message_id 幂等（已存在的跳过）。返回新增条数。
+
+        received_at 取消息到达本函数的时刻（本地接收时间，ADR-009）。
+        """
         added = 0
+        now = time.time()
         async with self._session() as s:
             for m in messages:
                 if not m.message_id or not m.text:
@@ -470,13 +525,15 @@ class SQLiteMemoryService:
                 s.add(ObservedMessageRow(
                     message_id=m.message_id, chat_id=chat_id,
                     user_id=m.user_id, user_name=m.user_name,
-                    text=m.text, timestamp=m.timestamp,
+                    text=m.text, timestamp=m.timestamp, received_at=now,
                 ))
                 added += 1
             await s.commit()
         return added
 
-    async def load_observed(self, chat_id: str, *, since: float = 0.0, limit: int = 200) -> list[ChatMessage]:
+    async def load_observed(
+        self, chat_id: str, *, since: float = 0.0, limit: int = 200,
+    ) -> list[ChatMessage]:
         """读取本群旁听消息（时间升序）。since 为Unix秒下限，limit 取最新 N 条。"""
         async with self._session() as s:
             q = (
@@ -498,12 +555,114 @@ class SQLiteMemoryService:
                 for r in rows
             ]
 
-    async def prune_observed(self, *, retain_days: int) -> int:
-        """保留期清理：删除 retain_days 天前的旁听消息。返回删除条数。"""
+    async def load_undistilled(
+        self, chat_id: str, watermark_ts: float, *, limit: int = 200,
+    ) -> list[ChatMessage]:
+        """读取水位线之后的旁听消息（最老优先，ADR-009 蒸馏输入）。
+
+        水位线按本地接收时间 received_at 比较（与飞书消息时间戳解耦，无跨端时钟
+        偏差）；与 load_observed 的「最新 N 条」语义相反：蒸馏必须覆盖最老的未蒸
+        消息，积压时借后续周期逐批推进。
+        """
+        async with self._session() as s:
+            rows = (
+                await s.execute(
+                    select(ObservedMessageRow)
+                    .where(
+                        ObservedMessageRow.chat_id == chat_id,
+                        ObservedMessageRow.received_at > watermark_ts,
+                    )
+                    .order_by(ObservedMessageRow.received_at.asc())
+                    .limit(limit)
+                )
+            ).scalars().all()
+            return [
+                ChatMessage(
+                    role="user", text=r.text, user_id=r.user_id,
+                    user_name=r.user_name, message_id=r.message_id, timestamp=r.timestamp,
+                )
+                for r in rows
+            ]
+
+    async def last_undistilled_received_at(self, chat_id: str, watermark_ts: float) -> float | None:
+        """水位线之后最新一条旁听消息的本地接收时间（水位线推进目标值）。"""
+        async with self._session() as s:
+            row = (
+                await s.execute(
+                    select(ObservedMessageRow.received_at)
+                    .where(
+                        ObservedMessageRow.chat_id == chat_id,
+                        ObservedMessageRow.received_at > watermark_ts,
+                    )
+                    .order_by(ObservedMessageRow.received_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            return row
+
+    async def count_undistilled(self, chat_id: str, watermark_ts: float) -> int:
+        """水位线之后的旁听消息数（活跃兜底触发判定用）。"""
+        async with self._session() as s:
+            row = await s.execute(
+                select(ObservedMessageRow.message_id)
+                .where(
+                    ObservedMessageRow.chat_id == chat_id,
+                    ObservedMessageRow.received_at > watermark_ts,
+                )
+            )
+            return len(row.all())
+
+    async def last_observed_received_at(self, chat_id: str) -> float | None:
+        """本群最新旁听消息的本地接收时间；群无任何旁听消息时返回 None。"""
+        async with self._session() as s:
+            row = (
+                await s.execute(
+                    select(ObservedMessageRow.received_at)
+                    .where(ObservedMessageRow.chat_id == chat_id)
+                    .order_by(ObservedMessageRow.timestamp.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            return row
+
+    async def prune_observed(
+        self, *, retain_days: int, respect_watermark: bool = False,
+    ) -> int:
+        """保留期清理：删除 retain_days 天前的旁听消息。返回删除条数。
+
+        respect_watermark=True（ADR-009）：只清理「本地接收时间在水位线之前」的
+        消息——未蒸馏的消息不论多老都保留，宁可缓冲变大也不静默丢数据；水位线
+        卡住时清理自然停滞，蒸馏恢复后追赶。开关关闭时退回纯年龄清理
+        （E2E/关闭蒸馏场景）。
+        """
         cutoff = time.time() - retain_days * 86400
         async with self._session() as s:
+            if respect_watermark:
+                watermarks = (
+                    await s.execute(select(DistillStateRow.chat_id, DistillStateRow.watermark_ts))
+                ).all()
+                wm_map = {chat_id: wm for chat_id, wm in watermarks}
+                chat_ids = (
+                    await s.execute(select(ObservedMessageRow.chat_id).distinct())
+                ).scalars().all()
+                deleted = 0
+                for chat_id in chat_ids:
+                    wm = wm_map.get(chat_id)
+                    # 该群尚无水位线记录（未初始化/未启用蒸馏）：整体不清理，避免误删
+                    if wm is None:
+                        continue
+                    result = await s.execute(
+                        delete(ObservedMessageRow).where(
+                            ObservedMessageRow.chat_id == chat_id,
+                            ObservedMessageRow.received_at < cutoff,
+                            ObservedMessageRow.received_at < wm,
+                        )
+                    )
+                    deleted += result.rowcount or 0
+                await s.commit()
+                return deleted
             result = await s.execute(
-                delete(ObservedMessageRow).where(ObservedMessageRow.timestamp < cutoff)
+                delete(ObservedMessageRow).where(ObservedMessageRow.received_at < cutoff)
             )
             await s.commit()
             return result.rowcount or 0
@@ -513,6 +672,51 @@ class SQLiteMemoryService:
         async with self._session() as s:
             rows = await s.execute(select(ObservedMessageRow.chat_id).distinct())
             return [r[0] for r in rows.all()]
+
+    # ---- 蒸馏游标（ADR-009）----
+
+    async def get_distill_state(
+        self, chat_id: str, *, init_watermark: float | None = None,
+    ) -> DistillState:
+        """取蒸馏游标；首见按 init_watermark 初始化落库。
+
+        init_watermark 语义：水位线基于本地接收时间（received_at），首见取 None
+        时由实现取「当前表内最新 received_at」——首见前已落库的消息全部视为存量，
+        不被蒸馏（ADR-009 首见决议）；显式传 0.0 表示全量蒸馏（测试用）。
+        """
+        async with self._session() as s:
+            row = await s.get(DistillStateRow, chat_id)
+            if row is not None:
+                return DistillState(
+                    chat_id=row.chat_id, watermark_ts=row.watermark_ts,
+                    last_success_at=row.last_success_at, last_failure_at=row.last_failure_at,
+                )
+            if init_watermark is None:
+                latest = (
+                    await s.execute(
+                        select(ObservedMessageRow.received_at)
+                        .where(ObservedMessageRow.chat_id == chat_id)
+                        .order_by(ObservedMessageRow.received_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                init_watermark = latest if latest is not None else time.time()
+            s.add(DistillStateRow(
+                chat_id=chat_id, watermark_ts=init_watermark,
+            ))
+            await s.commit()
+            return DistillState(chat_id=chat_id, watermark_ts=init_watermark)
+
+    async def save_distill_state(self, state: DistillState) -> None:
+        async with self._session() as s:
+            row = await s.get(DistillStateRow, state.chat_id)
+            if row is None:
+                row = DistillStateRow(chat_id=state.chat_id)
+                s.add(row)
+            row.watermark_ts = state.watermark_ts
+            row.last_success_at = state.last_success_at
+            row.last_failure_at = state.last_failure_at
+            await s.commit()
 
     async def list_binding_chats(self) -> list[str]:
         """重启补拉用：绑定了仓库的群列表。"""

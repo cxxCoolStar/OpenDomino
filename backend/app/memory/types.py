@@ -63,6 +63,12 @@ class MemoryStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+# 记忆来源类型（ADR-009）：manual=/沉淀、记住；correction=纠正提炼；overheard=旁听蒸馏
+MEMORY_SOURCE_MANUAL = "manual"
+MEMORY_SOURCE_CORRECTION = "correction"
+MEMORY_SOURCE_OVERHEARD = "overheard"
+
+
 @dataclass
 class MemoryHit:
     id: str
@@ -83,6 +89,19 @@ class MemoryDraft:
     keywords: list[str] = field(default_factory=list)
     source_session_id: str = ""
     source_task_id: str = ""
+    supersedes_id: str = ""             # 替代的旧条目（ADR-009；确认后旧条目转 archived）
+    source_type: str = MEMORY_SOURCE_MANUAL
+    source_chat_id: str = ""            # 来源群（overheard 溯源）
+
+
+@dataclass
+class DistillState:
+    """旁听蒸馏游标（ADR-009）：per-chat 水位线与冷却锚点，持久化可恢复。"""
+
+    chat_id: str
+    watermark_ts: float = 0.0           # 已蒸馏到的旁听消息时间戳下界（单调 max 推进）
+    last_success_at: float = 0.0        # 上次成功蒸馏时间（成功冷却锚点）
+    last_failure_at: float = 0.0        # 上次失败蒸馏时间（失败冷却锚点）
 
 
 # ---------- L3 知识库 ----------
@@ -114,6 +133,10 @@ class MemoryService(Protocol):
     async def confirm_memory(self, memory_id: str, actor_id: str) -> None: ...
     async def get_memory(self, memory_id: str) -> MemoryHit | None: ...
     async def delete_memory(self, memory_id: str) -> bool: ...
+
+    # 旁听蒸馏游标（ADR-009）
+    async def get_distill_state(self, chat_id: str, *, init_watermark: float = 0.0) -> "DistillState": ...
+    async def save_distill_state(self, state: "DistillState") -> None: ...
 
     # L3
     async def search_knowledge(self, query: str, *, limit: int = 8) -> list[KnowledgeHit]: ...

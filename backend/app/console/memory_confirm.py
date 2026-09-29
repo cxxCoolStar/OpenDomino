@@ -131,18 +131,37 @@ class MemoryConfirmHandler:
                 await reply(msg.chat_id, "这条待确认记忆已失效。", msg.session_webhook)
                 return True
             await self._memory.confirm_memory(memory_id, msg.user_id)
+            await self._advance_watermark(session)   # 三态语义：确认推进（ADR-009）
             session.pending_memory = None
             log.info("memory confirmed: chat=%s memory=%s by=%s", msg.chat_id, memory_id, msg.user_id)
             await reply(msg.chat_id, f"已保存团队记忆：「{hit.title}」。", msg.session_webhook)
             return True
         if _is_exact(msg.text, cancel_keywords()):
             await self._memory.delete_memory(memory_id)
+            # 三态语义：取消也推进——人已明确拒绝，下个周期不再重提（ADR-009）
+            await self._advance_watermark(session)
             session.pending_memory = None
             log.info("memory confirm cancelled: chat=%s memory=%s", msg.chat_id, memory_id)
             await reply(msg.chat_id, "好的，未保存。", msg.session_webhook)
             return True
         # 非确认/取消消息：pending_memory 保留（非阻塞提议），消息放行
         return False
+
+    async def _advance_watermark(self, session: SessionContext) -> None:
+        """确认/取消时把蒸馏游标推进到提议携带的目标值（单调 max；ADR-009）。
+
+        人工入口（/沉淀、记住、纠正）的提议 payload 无 watermark_ts，此处为空操作。
+        """
+        if not hasattr(self._memory, "get_distill_state"):
+            return
+        target = session.pending_memory.payload.get("watermark_ts") if session.pending_memory else None
+        if not target:
+            return
+        state = await self._memory.get_distill_state(session.chat_id)
+        if target > state.watermark_ts:
+            state.watermark_ts = float(target)
+            await self._memory.save_distill_state(state)
+            log.info("watermark advanced: chat=%s -> %.0f", session.chat_id, state.watermark_ts)
 
     def _expired(self, pending: PendingState) -> bool:
         ttl = settings.memory_confirm_ttl_minutes * 60

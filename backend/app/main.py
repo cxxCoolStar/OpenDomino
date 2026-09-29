@@ -11,6 +11,7 @@ from app.channels.feishu import FeishuChannel
 from app.channels.registry import ChannelRegistry
 from app.config import settings
 from app.console.agent import ConsoleAgent
+from app.console.distiller import Distiller
 from app.console.llm import OpenAIClient
 from app.console.router import Router
 from app.memory.service import SQLiteMemoryService
@@ -95,6 +96,14 @@ async def lifespan(app: FastAPI):
     # channel 需先创建再注册进 registry（reply 闭包已持有引用）
     registry.register(channel)
 
+    # 旁听蒸馏扫描器（ADR-009）：与消息管线共享 per-chat 锁与回复通道
+    distiller = Distiller(
+        memory,
+        llm,
+        chat_locks=agent.chat_locks(),
+        reply=lambda chat_id, text: reply(chat_id, text, ""),
+    )
+
     app.state.memory = memory
     app.state.console_agent = agent
     app.state.feishu_channel = channel
@@ -103,6 +112,8 @@ async def lifespan(app: FastAPI):
     app.state.container_pool = pool
     ws_task = asyncio.create_task(channel.start(), name="feishu-ws")
     log.info("OpenDomino started; Feishu WS connecting")
+    if settings.distiller_enabled:
+        distiller.start()
 
     # 重启补拉：对已知群幂等回拉历史（ADR-008 旁听决策 4）
     backfill_task = asyncio.create_task(_backfill_known_chats(channel, memory), name="feishu-backfill")
@@ -110,6 +121,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await distiller.stop()
         for t in (ws_task, backfill_task):
             t.cancel()
             try:
@@ -134,7 +146,10 @@ async def _backfill_known_chats(channel: FeishuChannel, memory: SQLiteMemoryServ
         since = time.time() - settings.feishu_backfill_days * 86400 if settings.feishu_backfill_days > 0 else 0.0
         for chat_id in sorted(chats):
             await channel.backfill(chat_id, since=since)
-        await memory.prune_observed(retain_days=settings.feishu_observe_retain_days)
+        await memory.prune_observed(
+            retain_days=settings.feishu_observe_retain_days,
+            respect_watermark=settings.distiller_enabled,
+        )
     except Exception:  # noqa: BLE001 —— 补拉失败不阻塞主流程
         log.exception("feishu backfill on startup failed")
 

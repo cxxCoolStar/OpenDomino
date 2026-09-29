@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     kbase_full_load_threshold: int = 20     # confirmed 条目数 ≤ 阈值时全量注入，超过才走召回
     session_compact_trigger: int = 40       # 消息数达到此值触发压缩（窗口的 2 倍）
     session_summary_max_chars: int = 1500
+    console_summary_model: str = ""         # 廉价摘要/蒸馏模型；空则回落 console_model
+
+    # ---- ADR-009 旁听结论蒸馏 ----
+    distiller_enabled: bool = True          # 总开关；false 不启动扫描器，prune 退回纯年龄清理
+    distill_scan_interval_seconds: int = 60     # 扫描器轮询间隔
+    distill_idle_minutes: int = 10          # 空闲判定阈值（距上一条旁听消息）
+    distill_force_threshold: int = 50       # 未蒸馏消息数兜底触发阈值
+    distill_cooldown_minutes: int = 360     # 两次成功蒸馏最小间隔（每群每天最多 4 次）
+    distill_failure_retry_minutes: int = 30 # 蒸馏失败后重试冷却
+    distill_batch_max: int = 200            # 单次蒸馏消息数上限（最老优先，积压分批推进）
 
     # ---- ADR-004 SandboxAgent ----
     sandbox_docker_image: str = "opendomino-sandbox:latest"  # 预装 git + /workspace（构建脚本见 handoff）

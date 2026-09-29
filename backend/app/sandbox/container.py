@@ -245,9 +245,11 @@ class ContainerPool:
 
         def _run() -> object:
             docker = self._client()
+            # 镜像 ENTRYPOINT=[sh]：Cmd 第一个元素被当脚本文件名（"cannot open tail"），
+            # 容器创建即退出 → 后续 exec 全 409。必须传 sh 的参数形式 [-c, "命令"]。
             container = docker.containers.run(
                 image,
-                command=["tail", "-f", "/dev/null"],
+                command=["-c", "tail -f /dev/null"],
                 detach=True,
                 # docker SDK 的 CPU 限额走 nano_cpus（1 核 = 1e9），非 --cpus
                 nano_cpus=int(settings.sandbox_cpus * 1e9),

@@ -298,8 +298,9 @@ class FeishuChannel(ChannelAdapter):
         try:
             from lark_oapi.api.im.v1 import ListMessageRequest
 
-            now_ms = str(int(time.time() * 1000))
-            start_time = str(int(since * 1000)) if since > 0 else ""
+            # 飞书历史 API 的 start/end_time 单位是秒（实测：毫秒值会被当成远古时间过滤为空集）
+            now_s = str(int(time.time()))
+            start_s = str(int(since)) if since > 0 else ""
             collected: list[UnifiedMessage] = []
             page_token = ""
             for _ in range(40):  # 40 页 × 50 条 = 2000 条硬上限（配置 1000 条的两倍余量）
@@ -308,8 +309,8 @@ class FeishuChannel(ChannelAdapter):
                     .container_id(chat_id) \
                     .page_size(50) \
                     .sort_type("ByCreateTimeDesc")
-                if start_time:
-                    builder = builder.start_time(start_time).end_time(now_ms)
+                if start_s:
+                    builder = builder.start_time(start_s).end_time(now_s)
                 if page_token:
                     builder = builder.page_token(page_token)
                 resp = await asyncio.to_thread(self._client.im.v1.message.list, builder.build())

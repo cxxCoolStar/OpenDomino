@@ -20,7 +20,10 @@
 
 重要架构决策以 ADR 形式沉淀在 `docs/decisions/` 下，逐模块讨论确认后归档：
 
-- [ADR-001 协作入口层：钉钉机器人 + Web 群聊](docs/decisions/001-channel-layer.md)
+- [ADR-001 协作入口层：钉钉机器人 + Web 群聊](docs/decisions/001-channel-layer.md)（通道选型已被 ADR-008 取代）
+- [ADR-002 三层记忆：Session、KBase 与正式知识库](docs/decisions/002-memory-layer.md)
+- [ADR-008 协作入口层迁移飞书与群聊旁听上下文](docs/decisions/008-feishu-channel.md)
+- [ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆](docs/decisions/009-overheard-distillation.md)
 
 ## 知识库文档规范（docs/ 下所有 Markdown 必须遵守）
 
