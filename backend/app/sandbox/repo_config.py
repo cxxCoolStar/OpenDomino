@@ -50,7 +50,7 @@ def _global_github_token() -> str:
 def parse_repo_execution_configs() -> dict[str, RepoExecutionConfig]:
     """解析 REPO_{NAME}_URL/_IMAGE/_SETUP_CMD/_TEST_CMD/_TOKEN。
 
-    与 console/context.py 的 parse_repo_registry 同风格：宽容解析，坏条目跳过并记日志。
+    宽容解析，坏条目跳过并记日志。
     token 缺省回退 GITHUB_TOKEN（全局凭据，适配单 token 管多仓库的场景）。
     """
     out: dict[str, RepoExecutionConfig] = {}

@@ -27,29 +27,6 @@ import asyncio
 from app.config import settings
 from app.memory.types import MemoryService, SessionContext
 
-_REPO_BINDINGS: dict[str, str] = {}  # chat_id -> repo_name（群关联仓库，ADR-003）
-
-
-def bind_repo(chat_id: str, repo: str) -> None:
-    _REPO_BINDINGS[chat_id] = repo
-
-
-def get_repo(chat_id: str) -> str:
-    return _REPO_BINDINGS.get(chat_id, "")
-
-
-def parse_repo_registry() -> dict[str, str]:
-    """解析 REPO_REGISTRY：name=url|desc;... -> {name: desc}"""
-    out: dict[str, str] = {}
-    for item in (settings.repo_registry or "").split(";"):
-        item = item.strip()
-        if not item or "=" not in item:
-            continue
-        name, rest = item.split("=", 1)
-        desc = rest.split("|", 1)[1] if "|" in rest else rest
-        out[name.strip()] = desc.strip()
-    return out
-
 
 class ContextAssembler:
     def __init__(self, memory: MemoryService) -> None:

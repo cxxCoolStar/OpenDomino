@@ -40,7 +40,6 @@ class Settings(BaseSettings):
     console_clarify_ttl_minutes: int = 30
     console_llm_timeout_seconds: int = 60   # 单次 LLM 调用硬超时（SDK 重试已禁用）；glm 高峰期 25s 不够，60s 保群聊稳定性
     console_llm_dump_dir: str = ""          # 调试：非空时每次 LLM 调用的完整报文落盘到该目录（llm_dump_*.json）
-    repo_registry: str = ""                 # name=url|desc;name2=url2|desc2（已废弃，改用 L2 repo_bindings）
     github_token: str = ""                  # 全局 GitHub PAT（沙箱 clone/push 凭据；REPO_{NAME}_TOKEN 未配时兜底）
 
     # ---- ADR-002 记忆层 ----

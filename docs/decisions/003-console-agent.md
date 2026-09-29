@@ -133,6 +133,14 @@ hermes 的会话 pin cwd，均不做「模型从清单猜」）：
 - 一群需要多仓库时，提供静态仓库清单（`REPO_REGISTRY`）供模型在用户意图明确时选择，
   意图不明确则 clarify 确认仓库，不臆测。
 
+### 实施演进（2026-09-29）
+
+- 绑定表已落 **L2 repo_bindings 表**（`memory/service.py`，`bind_repo`/`resolve_repo`/`list_repo_bindings`），
+  运行时入口为「绑定仓库/解绑/查看」确定性指令与 repo_op 路由动作（见 ADR-008）；
+  早期进程内字典方案已删除。
+- **静态清单 `REPO_REGISTRY` 未实施即废弃**：多仓库消歧由 L2 绑定表承担
+  （多绑定时模型未指名则 clarify，单绑定自然归属），配置项与解析函数已删除。
+
 ## 来源标记
 
 | 标记 | 含义 | 示例 |
@@ -252,7 +260,6 @@ CONSOLE_KBASE_LIMIT=5             # KBase 召回条数
 CONSOLE_KNOWLEDGE_LIMIT=8         # 知识库召回条数
 CONSOLE_MAX_CONTEXT_CHARS=12000   # 上下文总预算（字符）
 CONSOLE_CLARIFY_TTL_MINUTES=30    # 待澄清过期时间
-REPO_REGISTRY=                    # 备选静态仓库清单，name=url|desc，分号分隔
 ```
 
 ## 非目标（第一阶段）
