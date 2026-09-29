@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     distill_failure_retry_minutes: int = 30 # 蒸馏失败后重试冷却
     distill_batch_max: int = 200            # 单次蒸馏消息数上限（最老优先，积压分批推进）
 
+    # ---- ADR-002 Phase B 任务完成提炼 ----
+    task_distill_enabled: bool = True       # 任务 DONE 后提炼工程经验进确认流；失败不影响交付
+
     # ---- ADR-011 知识库文档自动同步 ----
     kbsync_enabled: bool = True             # 总开关；false 不启动同步循环
     kbsync_interval_seconds: int = 300      # 扫描间隔（docs 为 git 管理的低频内容，5 分钟延迟足够）

@@ -25,6 +25,7 @@ OpenDomino 复刻「从群聊提问到任务交付」的团队级 Agent 基础�
 
 - **ConsoleAgent**：单次结构化 JSON 路由；answer / clarify / delegate / repo_op / task_op 五种动作；同群串行锁；pending 澄清随 Session 持久化；LLM JSON 解析失败重试一次后降级回复；滚动压缩（Phase A）与纠正提炼已上线。
 - **旁听蒸馏（ADR-009）**：`console/distiller.py` 水位线扫描 + LLM 蒸馏 → 非阻塞记忆提议 → 群内确认流；E2E 26 用例全绿。
+- **任务完成提炼（ADR-002 Phase B，2026-09-29）**：`console/task_distill.py`——modify/investigate 任务 DONE 后 fire-and-forget 提炼工程经验（instruction + 汇总 + 改动统计），草稿进确认流，来源 `task` 可溯 `source_task_id`；开关 `task_distill_enabled`；失败不影响任务交付。
 - **任务管控（ADR-010）**：`sandbox/control.py` steer/cancel + `console/task_ops.py` 查询管控 + 上下文状态段活化。
 - **ToolRegistry（ADR-006）**：`app/tools/registry.py` 注册、toolset 过滤、check_fn、参数类型强转、统一错误与结果截断已有基础实现（含单测）；尚未接入执行循环——沙箱现用自己的 `sandbox/tools.py` 调度（两套工具层并存的收敛待决策）。
 ### 沙箱与运行入口
@@ -49,7 +50,6 @@ OpenDomino 复刻「从群聊提问到任务交付」的团队级 Agent 基础�
 ### 尚未实施
 
 - **verify.py 独立 AI 验证与 blocked 回炉**（ADR-004 管线步骤 5）：一期以预评审替代（`pipeline.py` finish 终态恒为 review），`sandbox_verify_max_retries` 配置暂无消费方。
-- **ADR-002 Phase B「任务完成提炼」**：任务 done 后触发 KBase 提炼（ADR-002/003 触发点），SandboxAgent 结论沉淀记忆的闭环未接。
 - **ADR-008 入群事件回拉**：`im.chat.member.bot.added_v1` 订阅未实现，bot 新入群需重启才能补拉历史；重启补拉已实现。
 - **SKILL 方法层（ADR-005）**：ADR 定稿、零代码——`app/skills/` 不存在、`load_skill` 未注册、`skills_dir` 为死配置。
 - **Langfuse 链路追踪（ADR-007）**：ADR 定稿、零代码——`app/tracing/` 不存在；依赖已装、`LANGFUSE_*` 配置已备，Task.trace_id 字段在库但恒为空。
@@ -58,8 +58,8 @@ OpenDomino 复刻「从群聊提问到任务交付」的团队级 Agent 基础�
 
 ## 验证状态
 
-- 单测：`cd backend && python -m pytest tests/ -q`（约 94 passed；console/sandbox/记忆/确认流/Phase A/task_ops/tools/向量召回全覆盖）。
-- **E2E（真实环境）**：飞书通道 44 用例（`scripts/e2e_feishu_channel.py`）、蒸馏 26 用例（`scripts/e2e_distill.py`）、KB 同步（`scripts/e2e_kbsync.py`）、沙箱三模式（`scripts/e2e_sandbox.py`，真实 Docker + GitHub PAT，modify 真实 push 分支）——均有 JSON 报告产物。
+- 单测：`cd backend && python -m pytest tests/ -q`（112 passed；console/sandbox/记忆/确认流/Phase A/任务提炼/task_ops/tools/向量召回全覆盖）。
+- **E2E（真实环境）**：飞书通道 44 用例（`scripts/e2e_feishu_channel.py`）、蒸馏 26 用例（`scripts/e2e_distill.py`）、任务提炼 9 断言（`scripts/e2e_task_distill.py`，FakeLLM 可离线复跑）、KB 同步（`scripts/e2e_kbsync.py`）、沙箱三模式（`scripts/e2e_sandbox.py`，真实 Docker + GitHub PAT，modify 真实 push 分支）——均有 JSON 报告产物。
 - **黄金测试集**：`eval/cases/` 21 个路由族 case + `scripts/run_golden.py`（真实 LLM，Decision 主断言），最近报告见 `data/golden_report.json`；重跑后注意核对报告里的 git_commit 是否为最新提交。
 - 服务运行于 `http://127.0.0.1:8000`，飞书 WebSocket 握手成功，真实群 @问答 + 旁听上下文闭环已验证（2026-09-28）。
 - `init()` 已加轻量列迁移（`pending_memory_json`、`summary`），旧库自动升级。
@@ -84,10 +84,9 @@ OpenDomino 复刻「从群聊提问到任务交付」的团队级 Agent 基础�
 
 ## 下一步开发顺序
 
-按「闭环完整性」优先排列；完成一项就移入「当前实现」并更新验证状态。第一优先是交付质量与记忆闭环（主链路最后三个断点）：verify.py 独立 AI 验证与回炉、Phase B 任务完成提炼、Langfuse 接入与 trace_id 贯通。
+按「闭环完整性」优先排列；完成一项就移入「当前实现」并更新验证状态。第一优先是交付质量与观测闭环（主链路剩余断点）：verify.py 独立 AI 验证与回炉、Langfuse 接入与 trace_id 贯通（Phase B 任务完成提炼已于 2026-09-29 完成，移入「当前实现」）。
 
 - **verify.py 独立 AI 验证与回炉**（ADR-004 步骤 5）：独立评审 + blocked 时按 `sandbox_verify_max_retries` 回炉重试；
-- **Phase B 任务完成提炼**（ADR-002 触发点 1 / ADR-003 触发点 3）：任务 done 后提炼结论进 KBase 确认流；
 - **Langfuse 接入**（ADR-007）：`app/tracing/` 埋点 + Task.trace_id 贯通（委派时生成、沙箱异步续接）。
 
 ### 2. 小而明确的补丁

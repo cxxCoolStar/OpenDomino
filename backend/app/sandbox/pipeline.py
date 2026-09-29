@@ -6,6 +6,9 @@
 ADR-010 增补：执行期工具事件真正落 TaskEvent 表；TaskControl 绑定后，
 steer 在迭代边界注入、cancel 协作退出落 CANCELED 终态，未消费的 steer
 作为 missed 报告回群。
+
+ADR-002 Phase B 增补：modify/investigate 任务 DONE 后异步触发任务完成提炼
+（task_distill），产出工程经验草稿进确认流；失败不影响任务交付回传。
 """
 from __future__ import annotations
 
@@ -36,6 +39,7 @@ class TaskPipeline:
         reporter: TaskReporter,
         memory=None,
         control: TaskControl | None = None,
+        task_distiller=None,
     ) -> None:
         self.tasks = tasks
         self.pool = pool
@@ -43,6 +47,7 @@ class TaskPipeline:
         self.reporter = reporter
         self._memory = memory      # 可选：L2 绑定解析（M:N 仓库解析主路径）
         self.control = control or TaskControl()   # 管控面：ConsoleAgent 经此下发 steer/cancel
+        self._task_distiller = task_distiller    # 可选：Phase B 任务完成提炼（fire-and-forget）
 
     async def run_task(self, task_id: str) -> None:
         task = await self.tasks.get(task_id)
@@ -137,6 +142,8 @@ class TaskPipeline:
             task.status = TaskStatus.DONE
             task.verify_result = "review"
             await self.reporter.finished(task)
+            self._submit_task_distill(task, outcome=result.summary)
+            return
 
         except Exception as e:  # noqa: BLE001 —— 任何异常都要落终态 + 群通知
             log.exception("pipeline failed task=%s", task_id)
@@ -209,6 +216,24 @@ class TaskPipeline:
         await self.tasks.append_event(
             task_id, TaskStage.REPORT, "stage_exit", "排查结论已回传群聊"
         )
+        self._submit_task_distill(task, outcome=result.summary)
+
+    def _submit_task_distill(self, task: Task, outcome: str) -> None:
+        """Phase B：任务 DONE 后异步提炼工程经验（fire-and-forget，失败只记日志）。
+
+        modify 任务的提炼输入含改动统计；事件落库标记 report 阶段触发。
+        """
+        if self._task_distiller is None or not settings.task_distill_enabled:
+            return
+        diff_stat = ""
+        if task.type == "modify":
+            diff_stat = f"分支 {task.branch_name}，提交数 {len(task.commits)}"
+        self._task_distiller.submit(
+            task_id=task.id, chat_id=task.chat_id, repo=task.repo,
+            task_type=task.type, instruction=task.instruction,
+            outcome=outcome, diff_stat=diff_stat,
+        )
+        log.info("task distill submitted task=%s type=%s", task.id, task.type)
 
     async def _pre_review(self, task: Task, diff: str, summary: str) -> str:
         """轻量预评审：直接把执行循环的汇总作为评审要点返回（verify.py 一期后补独立评审）。"""

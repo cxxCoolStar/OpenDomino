@@ -212,6 +212,13 @@ Task
 
 提炼流程、确认治理、写入规则全部遵循 ADR-002，ConsoleAgent 只做编排与展示。
 
+### 触发点 3 实施记录（Phase B，2026-09-29）
+
+任务完成提炼已实现（`console/task_distill.py`）：由沙箱管线在任务 DONE 后直接
+fire-and-forget 触发（`pipeline.py::_submit_task_distill`），不经 ConsoleAgent 编排；
+modify 与 investigate 两类任务都提炼，确认提示走任务来源群的回复通道，与消息管线/
+蒸馏共用 per-chat 锁。细节见 ADR-002 §任务完成提炼实施。
+
 ## pending 状态机
 
 | 状态 | 写入时机 | 消费方式 | 退出条件 |

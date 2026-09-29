@@ -75,7 +75,19 @@ async def lifespan(app: FastAPI):
     pool.start_sweeper()
     sandbox_agent = SandboxAgent(OpenAIChatClient())
     control = TaskControl()
-    pipeline = TaskPipeline(tasks, pool, sandbox_agent, reporter, memory=memory, control=control)
+    # ADR-002 Phase B：任务完成提炼（与蒸馏/消息管线共享 per-chat 锁与回复通道）
+    task_distiller = None
+    if settings.task_distill_enabled:
+        from app.console.task_distill import TaskDistiller
+
+        task_distiller = TaskDistiller(
+            memory,
+            llm,
+            chat_locks=None,    # 装配后回填：ConsoleAgent 构造晚于 pipeline
+            reply=lambda chat_id, text: reply(chat_id, text, ""),
+        )
+    pipeline = TaskPipeline(tasks, pool, sandbox_agent, reporter, memory=memory, control=control,
+                            task_distiller=task_distiller)
     executor = TaskExecutor(pipeline.run_task)
 
     # 重启恢复：pending 续跑，running/review 标失败（详细设计 §2.3）
@@ -102,6 +114,9 @@ async def lifespan(app: FastAPI):
         return await task_op_handler.handle(chat_id, op, task_id, message)
 
     agent = ConsoleAgent(memory=memory, router=router, reply=reply, delegate=delegate, task_op=task_op)
+    # Phase B 提炼与消息管线共用 per-chat 锁（agent 构造后回填）
+    if task_distiller is not None:
+        task_distiller._chat_locks = agent.chat_locks()
 
     # ADR-010：上下文状态段活化——装配器经此闭包把裸任务 ID 渲染为实时状态
     async def task_status_section(task_ids: list[str]) -> str:

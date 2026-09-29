@@ -64,10 +64,12 @@ class MemoryStatus(str, Enum):
     ARCHIVED = "archived"
 
 
-# 记忆来源类型（ADR-009）：manual=/沉淀、记住；correction=纠正提炼；overheard=旁听蒸馏
+# 记忆来源类型（ADR-009）：manual=/沉淀、记住；correction=纠正提炼；overheard=旁听蒸馏；
+# task=任务完成提炼（ADR-002 Phase B）
 MEMORY_SOURCE_MANUAL = "manual"
 MEMORY_SOURCE_CORRECTION = "correction"
 MEMORY_SOURCE_OVERHEARD = "overheard"
+MEMORY_SOURCE_TASK = "task"
 
 
 @dataclass

@@ -72,7 +72,7 @@ class MemoryRow(Base):
     source_session_id: Mapped[str] = mapped_column(String(64), default="")
     source_task_id: Mapped[str] = mapped_column(String(64), default="")
     supersedes_id: Mapped[str] = mapped_column(String(64), default="")   # ADR-009：替代的旧条目
-    source_type: Mapped[str] = mapped_column(String(32), default="")     # manual | correction | overheard
+    source_type: Mapped[str] = mapped_column(String(32), default="")     # manual | correction | overheard | task
     source_chat_id: Mapped[str] = mapped_column(String(128), default="") # 来源群（overheard 溯源）
     created_by: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[float] = mapped_column(Float, default=0.0)
