@@ -71,6 +71,12 @@ _MODE_INVESTIGATE = (
 )
 
 # ---- 块库：纪律（正交，跨类型复用） ----
+_PLAN_FIRST = (
+    "计划先行：多步任务在动手前，先输出一份 3~5 步的推进计划再开始调用工具；"
+    "执行中方向变化就修正计划。目标是把有限的工具调用步数花在收敛上，"
+    "不要无方向地逐步探索。"
+)
+
 _EVIDENCE_GROUNDING = (
     "证据纪律：每条结论标注来源（文件:行号 或 命令输出摘录）；"
     "读代码、grep、git 历史是最便宜的证据，先用它们。"
@@ -99,8 +105,8 @@ def _budget_awareness() -> str:
 # 类型 → 块组合（一处集中管理）。未知类型走 modify——与管线 else 分支的
 # 实际交付通道一致，保证提示词对管线行为永远说真话。
 _PROMPT_RECIPE: dict[str, tuple[str, ...]] = {
-    "investigate": (_MODE_INVESTIGATE, _EVIDENCE_GROUNDING, _COST_LADDER, _SCOPE_DISCIPLINE),
-    "modify": (_MODE_MODIFY, _SCOPE_DISCIPLINE),
+    "investigate": (_MODE_INVESTIGATE, _PLAN_FIRST, _EVIDENCE_GROUNDING, _COST_LADDER, _SCOPE_DISCIPLINE),
+    "modify": (_MODE_MODIFY, _PLAN_FIRST, _SCOPE_DISCIPLINE),
 }
 
 
