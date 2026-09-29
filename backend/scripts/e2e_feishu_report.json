@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-29 10:17:42",
+  "generated_at": "2026-09-29 16:57:38",
   "adr": "ADR-008 feishu-channel",
-  "pass": 28,
+  "pass": 43,
   "fail": 0,
   "cases": [
     {
@@ -97,7 +97,7 @@
     {
       "name": "context: @ 往来与旁听合并",
       "ok": true,
-      "detail": "<正式文档 知识库>\n以下是团队维护的正式文档，为权威事实源；与团队经验冲突时以正式文档为准，并应指出冲突。\n- 【正式文档】《decisions/009-overheard-distillation.md》ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆：# ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆\n\n> 状态：已确认（2026-09-28 讨论定稿并实施）\n> 日期：2026-09-28\n> 前置依赖：ADR-002 三层记忆（KBase 确认流）、ADR-008 飞书通道（旁听缓冲）\n> 关联：ADR-003 ConsoleAgent（Session 状态机）\n- 【正式文档】《decisions/001-channel-layer.md》ADR-001 协作入口层：钉钉机器人（Stream 模式）：# ADR-001 协作入口层：钉钉机器人（Stream 模式）\n\n> 状态：已确认（2026-09-23 修订：入口收敛为仅钉钉群聊，移除 Web 群聊；Web 端后期仅作管理后台）\n> 日期：2026-09-22\n> 决策参考：hermes-agent（`C:\\Users\\CoolStar\\Downloads\\hermes-agent`）\n- 【正式文档】《standards/knowledge-doc-standard.md》知识库文档撰写规范 "
+      "detail": "<正式文档 知识库>\n以下是团队维护的正式文档，为权威事实源；与团队经验冲突时以正式文档为准，并应指出冲突。\n- 【正式文档】《doc_a.md》文档A：# 文档A\n- 【正式文档】《sub/doc_c.md》文档C：# 文档C\n- 【正式文档】《decisions/009-overheard-distillation.md》ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆：# ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆\n\n> 状态：已确认（2026-09-28 讨论定稿并实施）\n> 日期：2026-09-28\n> 前置依赖：ADR-002 三层记忆（KBase 确认流）、ADR-008 飞书通道（旁听缓冲）\n> 关联：ADR-003 ConsoleAgent（Session 状态机）\n- 【正式文档】《decisions/010-task-progress-and-control.md》ADR-010 任务进展可见与中途管控（task_op） > 权衡与不做的决定：## 权衡与不做的决定\n\n- **不推群播报**：ADR-004 定案维持。查询 + 留痕已覆盖「想知道时查得到」；\n  主动推群的价值存疑且打扰性强，若未来要做，TaskEvent 落库是数据前提。\n- **不做 pending 改写**：排队任务「改需求」用 cancel + 重提覆盖，不"
     },
     {
       "name": "context: 时间戳归并排序",
@@ -143,6 +143,81 @@
       "name": "config: 免 @ 群配置存在",
       "ok": true,
       "detail": ""
+    },
+    {
+      "name": "md detect: 表格",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "md detect: 标题",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "md detect: 围栏",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "md detect: 加粗",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "md detect: 列表",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "md detect: 纯文本不误判",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "md detect: 单星号不误判",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "md card: schema 2.0",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "md card: markdown 组件承载全文",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "reply: markdown 走卡片",
+      "ok": true,
+      "detail": "sent=[('interactive', '{\"schema\": \"2.0\", \"config\": {\"update_multi\": false}, \"body\": {\"elements\": [{\"tag\": \"markdown\", \"content\": \"## 排查结论\\\\n| 文件 | 职责 |\\\\n|---|---|\\\\n| a.py | 主管线 |\"}]}}')]"
+    },
+    {
+      "name": "reply: 卡片含原文",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "reply: 纯文本走 text",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "reply: 卡片失败降级 text",
+      "ok": true,
+      "detail": "types=['interactive', 'text', 'interactive', 'text']"
+    },
+    {
+      "name": "reply: 降级 text 内容完整",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "reply: 三连失败错误可见",
+      "ok": true,
+      "detail": "error='feishu post 230001: Invalid param'"
     }
   ]
 }

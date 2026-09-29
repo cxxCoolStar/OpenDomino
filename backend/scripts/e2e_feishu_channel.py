@@ -224,6 +224,101 @@ async def test_context_merge(memory: SQLiteMemoryService):
     check("context: 段标签 [群聊上下文]", "[群聊上下文]" in context)
 
 
+# ---------- 4.5 回复格式选择（Markdown 卡片） ----------
+
+class _FakeResponse:
+    def __init__(self, ok: bool, code: int = 0, msg: str = ""):
+        self._ok = ok
+        self.code = code
+        self.msg = msg
+
+    def success(self) -> bool:
+        return self._ok
+
+
+async def test_reply_format_selection():
+    """reply 格式选择：Markdown 特征 → interactive 卡片；纯文本 → text；
+    卡片失败（超限等）→ 降级 text 重发。断言经 mock client 记录的 msg_type/content。"""
+    from app.channels.feishu import _build_markdown_card, _looks_like_markdown
+
+    # 检测函数
+    check("md detect: 表格", _looks_like_markdown("| a | b |\n|---|---|\n| 1 | 2 |"))
+    check("md detect: 标题", _looks_like_markdown("## 结论"))
+    check("md detect: 围栏", _looks_like_markdown("```\ncode\n```"))
+    check("md detect: 加粗", _looks_like_markdown("**执行中**"))
+    check("md detect: 列表", _looks_like_markdown("- 第一条"))
+    check("md detect: 纯文本不误判", not _looks_like_markdown("排查完成，耗时 52 秒"))
+    check("md detect: 单星号不误判", not _looks_like_markdown("a * b 加法"))
+
+    # 卡片 JSON 结构
+    card = json.loads(_build_markdown_card("## 标题\n| a | b |"))
+    check("md card: schema 2.0", card.get("schema") == "2.0")
+    check("md card: markdown 组件承载全文",
+          card["body"]["elements"][0]["tag"] == "markdown"
+          and card["body"]["elements"][0]["content"] == "## 标题\n| a | b |")
+
+    # reply 分流与降级：mock client 记录每次 create 的 msg_type/content
+    sent: list[tuple[str, str]] = []
+
+    class _Messages:
+        def __init__(self, results):
+            self._results = results
+
+        def create(self, request):  # 同步方法，与真实 SDK 一致（通道层经 to_thread 调用）
+            body = request.request_body
+            sent.append((body.msg_type, body.content))
+            return self._results.pop(0)
+
+    class _ImV1:
+        def __init__(self, results):
+            self.message = _Messages(results)
+
+    class _Im:
+        def __init__(self, results):
+            self.v1 = _ImV1(results)
+
+    class _FakeClient:
+        def __init__(self, results):
+            self.im = _Im(results)
+
+    async def _send(channel, text_):
+        return await channel.reply("oc_x", text_)
+
+    ch = FeishuChannel(lambda m: asyncio.sleep(0), None)
+
+    # Markdown 内容 → interactive 卡片
+    ch._client = _FakeClient([_FakeResponse(True)])
+    md_text = "## 排查结论\n| 文件 | 职责 |\n|---|---|\n| a.py | 主管线 |"
+    r1 = await _send(ch, md_text)
+    check("reply: markdown 走卡片", r1.ok and sent[-1][0] == "interactive", f"sent={sent}")
+    card_sent = json.loads(sent[-1][1])
+    check("reply: 卡片含原文", card_sent["body"]["elements"][0]["content"] == md_text)
+
+    # 纯文本 → text
+    ch._client = _FakeClient([_FakeResponse(True)])
+    r2 = await _send(ch, "排查完成，耗时 52 秒")
+    check("reply: 纯文本走 text", r2.ok and sent[-1][0] == "text")
+
+    # 卡片被拒（超限 230020）→ 降级 text 重发同内容
+    ch._client = _FakeClient([_FakeResponse(False, code=230020, msg="card json too large"), _FakeResponse(True)])
+    r3 = await _send(ch, md_text)
+    types = [t for t, _ in sent]
+    check("reply: 卡片失败降级 text", r3.ok and types[-2:] == ["interactive", "text"], f"types={types}")
+    check("reply: 降级 text 内容完整", json.loads(sent[-1][1])["text"] == md_text)
+
+    # 卡片、text、post 三连失败 → 错误可见（text 被拒 230001 后还会走 post 降级，共 3 次 create）
+    ch._client = _FakeClient([
+        _FakeResponse(False, code=230020, msg="too large"),
+        _FakeResponse(False, code=230001, msg="Invalid param"),
+        _FakeResponse(False, code=230001, msg="Invalid param"),
+    ])
+    r4 = await _send(ch, md_text)
+    check("reply: 三连失败错误可见", not r4.ok and "feishu post" in (r4.error or ""), f"error={r4.error!r}")
+
+
+
+
+
 # ---------- 5. 回拉解析与补拉链路 ----------
 
 def test_backfill_parse():
@@ -285,6 +380,7 @@ async def main():
     test_backfill_parse()
     await test_startup_backfill(memory)
     test_config_contract()
+    await test_reply_format_selection()
 
     report = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),

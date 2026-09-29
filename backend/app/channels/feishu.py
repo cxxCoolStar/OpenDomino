@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from collections import OrderedDict
 from typing import Awaitable, Callable
@@ -223,7 +224,21 @@ class FeishuChannel(ChannelAdapter):
         """回复群消息：bot 发消息 API 按 chat_id 寻址（ADR-008 通道层决议 4）。
 
         session_webhook 参数仅为兼容 ChannelAdapter 签名，飞书通道恒忽略。
+        格式选择：内容含高置信 Markdown 特征（表格/标题/代码围栏/加粗/列表）时发
+        interactive 卡片（JSON 2.0 schema，markdown 组件可渲染标题/表格/代码块），
+        纯文本维持 msg_type=text；卡片超限（230020）降级回纯文本重试。
         """
+        client = self._client
+        if client is None:
+            return SendResult(ok=False, error="feishu client not started")
+        if _looks_like_markdown(text):
+            card_result = await self._reply_card(chat_id, text)
+            if card_result.ok:
+                return card_result
+            log.warning("feishu card reply failed, fallback to text: %s", card_result.error)
+        return await self._reply_text(chat_id, text)
+
+    async def _reply_text(self, chat_id: str, text: str) -> SendResult:
         client = self._client
         if client is None:
             return SendResult(ok=False, error="feishu client not started")
@@ -250,6 +265,30 @@ class FeishuChannel(ChannelAdapter):
                 ok=False,
                 error=f"feishu api {response.code}: {response.msg}",
             )
+        except Exception as e:  # noqa: BLE001
+            return SendResult(ok=False, error=f"{type(e).__name__}: {e}")
+
+    async def _reply_card(self, chat_id: str, text: str) -> SendResult:
+        """Markdown 内容发 interactive 卡片（JSON 2.0，单 markdown 组件承载全文）。"""
+        try:
+            import lark_oapi as lark
+            from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
+
+            card = _build_markdown_card(text)
+            body = CreateMessageRequestBody.builder() \
+                .receive_id(chat_id) \
+                .msg_type("interactive") \
+                .content(card) \
+                .build()
+            request = CreateMessageRequest.builder() \
+                .receive_id_type("chat_id") \
+                .request_body(body) \
+                .build()
+            response = await asyncio.to_thread(self._client.im.v1.message.create, request)
+            if response.success():
+                return SendResult(ok=True)
+            # 卡片超限（230020 卡片 JSON 过大）等失败 → 返回错误，由 reply 降级纯文本
+            return SendResult(ok=False, error=f"feishu card {response.code}: {response.msg}")
         except Exception as e:  # noqa: BLE001
             return SendResult(ok=False, error=f"{type(e).__name__}: {e}")
 
@@ -467,6 +506,40 @@ def _json_content(text: str) -> str:
     import json
 
     return json.dumps({"text": text}, ensure_ascii=False)
+
+
+# 高置信 Markdown 特征：命中任一才走卡片（保守判定，纯文本绝不误入卡片路径）
+_MD_PATTERNS = (
+    re.compile(r"^\s*\|.+\|\s*$", re.M),              # 表格行（| ... |）
+    re.compile(r"^#{1,6}\s+\S", re.M),                # ATX 标题
+    re.compile(r"^```", re.M),                        # 代码围栏
+    re.compile(r"\*\*[^*\n]+\*\*"),                   # 加粗
+    re.compile(r"^\s*[-*+]\s+\S", re.M),              # 无序列表
+    re.compile(r"^\s*\d+\.\s+\S", re.M),              # 有序列表
+)
+
+
+def _looks_like_markdown(text: str) -> bool:
+    return any(p.search(text) for p in _MD_PATTERNS)
+
+
+def _build_markdown_card(text: str) -> str:
+    """构造 JSON 2.0 卡片：单 markdown 组件承载全文。
+
+    JSON 2.0 的 markdown 组件支持标题/表格/代码块/列表语法。
+    """
+    import json
+
+    card = {
+        "schema": "2.0",
+        "config": {"update_multi": False},
+        "body": {
+            "elements": [
+                {"tag": "markdown", "content": text},
+            ]
+        },
+    }
+    return json.dumps(card, ensure_ascii=False)
 
 
 def _parse_item_body(item: object, msg_type: str) -> str:
