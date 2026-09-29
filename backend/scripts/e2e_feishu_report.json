@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-29 17:18:04",
+  "generated_at": "2026-09-29 17:39:52",
   "adr": "ADR-008 feishu-channel",
-  "pass": 44,
+  "pass": 49,
   "fail": 0,
   "cases": [
     {
@@ -116,6 +116,31 @@
     },
     {
       "name": "backfill: item post 解析",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "route: 空对象分支字段放行且正确委派",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "route: 空对象被归一为 None",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "route: 无需重试直接解析成功",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "route: 重试提示附带具体校验错误",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "route: 双次失败降级原样回复",
       "ok": true,
       "detail": ""
     },

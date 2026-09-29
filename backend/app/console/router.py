@@ -45,16 +45,17 @@ class Router:
     async def route(self, context: str, user_text: str) -> Decision:
         user = f"{context}\n\n[用户本条消息]\n{user_text}" if context else user_text
         raw = await self._llm.complete(self._system, user)
-        decision = self._try_parse(raw)
+        decision, err = self._try_parse(raw)
         if decision is not None:
             return decision
-        # 重试一次：把解析错误反馈给模型
-        log.warning("route json parse failed, retrying once. raw=%s", raw[:200])
+        # 重试一次：把具体的解析/校验错误反馈给模型
+        log.warning("route json parse failed, retrying once. raw=%s err=%s", raw[:200], err)
         retry_user = (
-            f"{user}\n\n[系统提示] 你上一条输出不是合法 JSON，请只输出一个 JSON 对象。\n上次输出：{raw[:500]}"
+            f"{user}\n\n[系统提示] 你上一条输出未能解析为有效的路由决策，错误：{err}\n"
+            f"请只输出一个 JSON 对象，未选中的分支字段一律省略，不要填空对象。\n上次输出：{raw[:500]}"
         )
         raw2 = await self._llm.complete(self._system, retry_user)
-        decision = self._try_parse(raw2)
+        decision, err2 = self._try_parse(raw2)
         if decision is not None:
             return decision
         # 降级：原样回复，不静默失败
@@ -64,9 +65,13 @@ class Router:
         )
 
     @staticmethod
-    def _try_parse(raw: str) -> Decision | None:
+    def _try_parse(raw: str) -> tuple[Decision | None, str]:
+        """返回 (决策, 错误说明)；成功时错误说明为空串，失败时用于重试反馈与日志。"""
         try:
             data = _extract_json(raw)
-            return Decision.model_validate(data)
-        except Exception:  # noqa: BLE001
-            return None
+        except Exception as e:  # noqa: BLE001
+            return None, f"不是合法的 JSON 对象（{e}）"
+        try:
+            return Decision.model_validate(data), ""
+        except Exception as e:  # noqa: BLE001
+            return None, f"JSON 结构不符合路由 Schema（{e}）"

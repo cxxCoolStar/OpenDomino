@@ -359,6 +359,49 @@ async def test_startup_backfill(memory: SQLiteMemoryService):
 
 # ---------- 6. 配置契约 ----------
 
+async def test_route_schema_robustness():
+    """路由 JSON 健壮性（线上 bug 回归）：模型把未选中的分支填成空对象 {} 时，
+    不得整体拒收导致裸 JSON 降级漏进群里；重试提示需带具体校验错误。"""
+    from app.console.llm import LLMClient
+    from app.console.router import Router
+
+    class ScriptedLLM(LLMClient):
+        def __init__(self, replies):
+            self.replies = list(replies)
+            self.calls = []
+
+        async def complete(self, system, user):
+            self.calls.append(user)
+            return self.replies.pop(0)
+
+    # 线上 bug 原始输出：action=delegate 本身正确，但 repo_op/task_op 被填成空对象
+    screenshot_raw = (
+        '{"action":"delegate","answer":"","clarify_question":"","task":{"title":"梳理 OpenDomino '
+        '当前待开发需求清单","instruction":"进入仓库核实当前项目的开发进度与待办需求，给出「还有哪些'
+        '需求需要开发」的清单。","repo":"OpenDomino","type":"investigate"},"repo_op":{},'
+        '"task_op":{},"pending_resolution":"none","correction_detected":false}'
+    )
+    llm = ScriptedLLM([screenshot_raw])
+    d = await Router(llm).route("", "帮我看看当前项目还有哪些需求需要开发")
+    check("route: 空对象分支字段放行且正确委派", d.action.value == "delegate" and d.task.repo == "OpenDomino")
+    check("route: 空对象被归一为 None", d.repo_op is None and d.task_op is None)
+    check("route: 无需重试直接解析成功", len(llm.calls) == 1)
+
+    # 重试提示带具体校验错误（非法 action）
+    llm2 = ScriptedLLM(['{"action":"frobnicate","answer":"x"}', '{"action":"answer","answer":"ok"}'])
+    d2 = await Router(llm2).route("", "x")
+    check(
+        "route: 重试提示附带具体校验错误",
+        d2.action.value == "answer" and len(llm2.calls) == 2
+        and "JSON 结构不符合路由 Schema" in llm2.calls[1],
+    )
+
+    # 两次失败仍降级原样回复（不静默失败）
+    llm3 = ScriptedLLM(["这不是JSON", "还是不是JSON"])
+    d3 = await Router(llm3).route("", "x")
+    check("route: 双次失败降级原样回复", d3.answer == "还是不是JSON")
+
+
 def test_config_contract():
     import app.config as cfg
 
@@ -380,6 +423,7 @@ async def main():
     await test_store(memory)
     await test_context_merge(memory)
     test_backfill_parse()
+    await test_route_schema_robustness()
     await test_startup_backfill(memory)
     test_config_contract()
     await test_reply_format_selection()
