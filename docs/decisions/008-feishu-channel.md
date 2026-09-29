@@ -1,6 +1,6 @@
 # ADR-008 协作入口层迁移飞书与群聊旁听上下文
 
-> 状态：讨论稿（待确认）
+> 状态：已确认（2026-09-24 实施落地，2026-09-28 实测修复：机器人身份自学习、@ 占位符还原、上下文段落按稳定性重排）
 > 日期：2026-09-24
 > 前置依赖：ADR-001 协作入口层、ADR-002 三层记忆、ADR-003 ConsoleAgent
 > 关联：ADR-005 技能层（本文修订其通道前提）
@@ -72,9 +72,8 @@ ConsoleAgent 管线（照旧写入 `session.messages`），非 @ 消息写入旁
    ADR-008 取代，机制借鉴清单仍有效」。git 历史保留完整回退路径。
 3. **通道数据不迁移**。钉钉 `chat_id`（`cidV...`）与飞书 `chat_id`（`om_...`）属于不同
    体系，群绑定（GroupRepoBinding）、会话记录、测试数据均不迁移，飞书群重新绑定。个人
-   项目数据量小，一次性成本可接受。
-6. **钉钉死配置一并移除**：`DINGTALK_FREE_RESPONSE_CHATS` 在钉钉平台上等不到非 @ 推送，
-   属死配置，随通道删除。
+   项目数据量小，一次性成本可接受。`DINGTALK_FREE_RESPONSE_CHATS` 在钉钉平台上等不到
+   非 @ 推送，属死配置，随通道删除。
 
 ### 通道层决议：回复寻址与门控
 
@@ -82,12 +81,10 @@ ConsoleAgent 管线（照旧写入 `session.messages`），非 @ 消息写入旁
    bot 发消息 API（`tenant_access_token` 由 SDK 管理）按 `chat_id` 寻址回复。`ChannelAdapter.reply(chat_id, text)`
    接口不变，ConsoleAgent 层零改动；`UnifiedMessage.session_webhook` 字段在飞书通道恒为
    None，字段保留不删（字段语义为「来源通道自带的临时回复地址」）。
-5. **门控配置语义沿用钉钉三开关**：`FEISHU_ALLOWED_CHATS`（群白名单）、
+5. **门控配置语义沿用三开关**：`FEISHU_ALLOWED_CHATS`（群白名单）、
    `FEISHU_ALLOWED_USERS`（用户白名单）、`FEISHU_REQUIRE_MENTION`（默认 true）。
    @ 判定沿用 hermes 机制：判 mentions 列表中是否含机器人身份（open_id/user_id/name），
    `@_all` 视为 @。
-6. **钉钉死配置一并移除**：`DINGTALK_FREE_RESPONSE_CHATS` 在钉钉平台上等不到非 @ 推送，
-   属死配置，随通道删除。
 
 ### 旁听上下文四决策：形态与段 2 改造
 

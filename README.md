@@ -1,14 +1,14 @@
 # OpenDomino
 
-从钉群提问到任务交付 —— 团队级 Agent 基础设施全链路实践的开源复刻。
+从群聊提问到任务交付 —— 团队级 Agent 基础设施全链路实践的开源复刻。
 
 复刻自阿里云云原生消息前端团队自研研发协作平台 **Domino** 的架构思想：以「两类 Agent 接力 + 三层分层记忆 + SKILL 方法体系 + CLI/MCP 工具生态」为核心，让 Agent 真正进入团队日常协作入口，完成从群聊提问到代码交付的完整闭环。
 
 ## 核心架构
 
 ```
-协作入口层（钉钉机器人，Stream 模式）
-        │  @Domino 提问 · 群级会话延续 · 任务链接回传
+协作入口层（飞书机器人，WebSocket 长连接）
+        │  @Domino 提问 · 群级会话延续 · 群聊旁听 · 任务链接回传
         ▼
 ConsoleAgent（理解与路由，不直接改业务代码）
         │  延续群 Session → 检索 KBase → 查知识库/CodeWiki
@@ -27,7 +27,7 @@ SandboxAgent（执行与交付，真实仓库沙箱）
 - 后端：Python FastAPI + SQLAlchemy + ChromaDB（向量记忆）+ Docker SDK（沙箱）
 - 前端：React + Vite + Ant Design
 - LLM：OpenAI 兼容接口（可配 base_url / api_key / model）
-- 群聊入口：钉钉机器人（Stream 模式）
+- 群聊入口：飞书机器人（lark-oapi WebSocket 长连接，见 ADR-008）
 - 管理后台：Web（任务记录 / KBase 治理 / Dashboard / 配置，后期建设，非聊天入口）
 - Git：真实提交；CodeReview / 部署 / AI 验证：简化闭环
 
@@ -43,13 +43,17 @@ SandboxAgent（执行与交付，真实仓库沙箱）
 
 逐模块讨论确认后归档于 `docs/decisions/`：
 
-- [ADR-001 协作入口层：钉钉机器人（Stream 模式）](docs/decisions/001-channel-layer.md)
+- [ADR-001 协作入口层：钉钉机器人（Stream 模式）](docs/decisions/001-channel-layer.md)（通道选型已被 ADR-008 取代）
 - [ADR-002 三层记忆：Session、KBase 与正式知识库](docs/decisions/002-memory-layer.md)
 - [ADR-003 ConsoleAgent：理解与路由](docs/decisions/003-console-agent.md)
 - [ADR-004 SandboxAgent：执行与交付](docs/decisions/004-sandbox-agent.md)
 - [ADR-005 SKILL 方法层](docs/decisions/005-skill-layer.md)
 - [ADR-006 工具层：Tool Registry](docs/decisions/006-tool-layer.md)
 - [ADR-007 链路追踪：Langfuse](docs/decisions/007-tracing.md)
+- [ADR-008 协作入口层迁移飞书与群聊旁听上下文](docs/decisions/008-feishu-channel.md)
+- [ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆](docs/decisions/009-overheard-distillation.md)
+- [ADR-010 任务进展可见与中途管控（task_op）](docs/decisions/010-task-progress-and-control.md)
+- [ADR-011 知识库文档自动同步：周期扫描 + Source 抽象 + 镜像删除](docs/decisions/011-kb-doc-sync.md)
 
 ## 状态
 

@@ -11,7 +11,7 @@
 | 1 | LLM 调用机制 | 原生 function calling；hermes 循环骨架；上下文管理用 8k 截断 + 确定性裁剪（LLM 摘要压缩留二期） |
 | 2 | TaskService 与恢复 | 新增 Task/TaskEvent 两表；create 落库+入队即返回；重启时 pending 续跑、running 标 failed |
 | 3 | 容器池 | 按 repo 池化复用；**容器内 clone**（非 bind-mount）；fastclaw 超时击杀/黑名单/env 三件套照搬 |
-| 4 | 状态回传 | 钉钉主动发消息 API 为主 + session_webhook 兜底 + TaskEvent 永远落库 |
+| 4 | 状态回传 | 飞书 bot 发消息 API 按 chat_id 寻址（ADR-008 迁移后修订）+ TaskEvent 永远落库 |
 | 5 | 凭据注入 | HTTPS + PAT（`REPO_{NAME}_TOKEN`）+ git url.insteadOf + **工具输出脱敏** |
 | 6 | 工具接入 | **全局 ToolRegistry 单例**，启动时静态注册一次，容器经 `dispatch(..., executor=...)` ctx 注入 |
 
@@ -198,24 +198,21 @@ __FC_PGID=<marker> setsid -w sh -c 'echo $$ > "$__FC_PGID"; eval "$__FC_CMD"'
 ConsoleAgent 仍以两种方式参与：用户问「任务怎么样了」→ 拉取 TaskService 作答；
 任务 done → 触发 KBase 提炼（ADR-002 触发点 3）。
 
-### 4.2 钉钉发送通道（解决 session_webhook 5 分钟过期）
+### 4.2 飞书发送通道（ADR-008 迁移后修订；钉钉 session_webhook 过期问题已不存在）
 
-任务跑 30 分钟，webhook 早已过期。方案（定案）：
+任务跑 30 分钟，钉钉时代的 session_webhook（5 分钟过期）方案已随通道迁移作废。飞书通道下
+本节方案简化为（定案）：
 
-1. **主通道**：钉钉企业机器人主动发消息 API（`/v1.0/robot/groupMessages/send`，
-   `robotCode + openConversationId + accessToken`），无过期时间、同一机器人身份、
-   零额外配置（client_id 即 robotCode，chat_id 即 openConversationId）。
-   `DingTalkChannel` 新增 `send_to_chat(chat_id, text)` 方法，channel 内缓存
-   accessToken（有效期 2h，过期前刷新）。
-2. **兜底**：API 调用失败（权限未批等）→ 退回缓存的 session_webhook → 仍失败 → 只落 TaskEvent。
+1. **唯一通道**：FeishuChannel 经 bot 发消息 API（`im/v1/messages`，`receive_id_type=chat_id`）
+   按 `chat_id` 寻址发送，无过期时间、同一机器人身份、`tenant_access_token` 由 SDK 管理。
+   text 消息因特殊字符被拒（错误码 230001）时降级 post 富文本重发。
+2. **失败兜底**：API 调用失败 → 只落 TaskEvent。
 3. **兜底兜底**：TaskEvent 表永远落库，任何情况下不丢留痕。
-
-需人工确认项：机器人需开通企业内部机器人发群消息 API 权限（企业管理员审批）。
 
 ### 4.3 新增 channels/registry.py
 
 `chat_id → ChannelAdapter` 注册表（ADR-004 模块结构已列）：sandbox/reporter 经它回传，
-不 import 具体通道。main.py 装配时把 DingTalkChannel 注册进去。
+不 import 具体通道。main.py 装配时把 FeishuChannel 注册进去。
 
 ## 5. 仓库配置与凭据（sandbox/repo_config.py）
 
@@ -324,8 +321,8 @@ sandbox_sweep_interval_seconds: int = 30
 2. `sandbox/storage.py` TaskService + 重启恢复
 3. `sandbox/container.py` 容器池 + git_ops + 真超时（docker 集成测试）
 4. 工具注册（单例 + ctx）+ 脱敏
-5. reporter + channels/registry + 钉钉主动 API
+5. reporter + channels/registry + 飞书寻址回传
 6. review/verify + main.py 接线（ConsoleAgent delegate 打通）
-7. E2E：钉钉群委派 → 容器执行 → 分支 push → 群回传
+7. E2E：飞书群委派 → 容器执行 → 分支 push → 群回传
 
 每步独立可测，1-2 步不依赖 Docker 即可先行。
