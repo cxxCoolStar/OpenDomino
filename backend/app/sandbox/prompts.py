@@ -43,6 +43,14 @@ _BUDGET_HIGH_NOTICE = (
     "停止扩展探索，基于已有信息收敛并产出交付。"
 )
 
+# 空交卷兜底（任务 #dccfa430 事故修复）：natural 退出但正文为空时补调索要结论。
+# 常见于推理模型：末轮 reasoning_content 耗在思考上、content 为空 + 无 tool_calls。
+_EMPTY_SUMMARY_NUDGE = (
+    "上一条响应没有输出任何正文内容。请直接输出最终交付："
+    "排查任务给出带证据的结论，开发任务给出交付摘要（改了什么、怎么验证的、遗留风险）。"
+    "不要调用工具，不要输出空内容。"
+)
+
 # steer 投递前缀（ADR-010）：独立 user 消息注入，模型据此在中途调整方向
 STEER_PREFIX = "[中途指示] "
 
@@ -137,3 +145,4 @@ LOOP_SOFT_NUDGE = _LOOP_SOFT_NUDGE
 STRIP_TOOLS_NUDGE = _STRIP_TOOLS_NUDGE
 BUDGET_HALF_NOTICE = _BUDGET_HALF_NOTICE
 BUDGET_HIGH_NOTICE = _BUDGET_HIGH_NOTICE
+EMPTY_SUMMARY_NUDGE = _EMPTY_SUMMARY_NUDGE

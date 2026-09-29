@@ -328,6 +328,53 @@ async def test_agent_natural_completion():
 
 
 @pytest.mark.asyncio
+async def test_agent_empty_natural_completion_retries_then_recovers():
+    """空交卷兜底：natural 退出但 summary 为空白时，先补调索要结论而非直接交空卷。
+
+    真实事故（任务 #dccfa430）：推理模型末轮返回空 content + 无 tool_calls，
+    循环原样接受空文本，管线只能落「排查未产出结论」失败。
+    """
+    from app.sandbox.prompts import EMPTY_SUMMARY_NUDGE
+
+    calls: list[tuple[int, bool]] = []
+
+    class EmptyThenRescuedLLM:
+        """前两轮按脚本：轮1 发工具，轮2 空交卷；补调（无工具）返回救场结论。"""
+
+        async def chat(self, messages, tools=None):
+            calls.append((len(messages), tools is None))
+            if tools is not None:
+                if len(calls) == 1:
+                    return LLMResult(text="", tool_calls=[ToolCall(id="1", name="list_dir", args={})])
+                return LLMResult(text="   ", tool_calls=[])   # 空交卷（whitespace 也算空）
+            assert any(EMPTY_SUMMARY_NUDGE in str(m.get("content")) for m in messages)
+            return LLMResult(text="最终结论：已完成排查", tool_calls=[])
+
+    r = await SandboxAgent(EmptyThenRescuedLLM()).run(
+        make_task(type_="investigate"), ToolContext(executor=FakeExecutor()))
+    assert r.status == "done" and "最终结论" in r.summary and r.exit_reason == "natural"
+    assert calls[-1][1] is True, "补调必须无工具"
+
+
+@pytest.mark.asyncio
+async def test_agent_empty_natural_completion_twice_fails():
+    """连续两次空响应：补调仍为空 → 落 failed，不再无限补调。"""
+    class AlwaysEmptyLLM:
+        def __init__(self):
+            self.n = 0
+
+        async def chat(self, messages, tools=None):
+            self.n += 1
+            return LLMResult(text="", tool_calls=[])
+
+    llm = AlwaysEmptyLLM()
+    r = await SandboxAgent(llm).run(make_task(type_="investigate"), ToolContext(executor=FakeExecutor()))
+    assert r.status == "failed" and r.exit_reason == "natural"
+    assert "空响应" in r.error
+    assert llm.n == 2, "首轮空响应后应恰好补调一次"
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_guard_injects_warning(monkeypatch):
     from app.sandbox.prompts import LOOP_WARNING
 
@@ -597,14 +644,18 @@ async def test_pipeline_investigate_readonly_path():
 
 @pytest.mark.asyncio
 async def test_pipeline_investigate_no_conclusion_fails():
-    """排查任务无结论 → failed。"""
+    """排查任务连续空响应（补调后仍无结论）→ failed。"""
     task = make_task(type_="investigate")
     tasks, pool, rep = FakeTasks(task), FakePool(), FakeReporter()
-    llm = ScriptLLM([LLMResult(text="   ", tool_calls=[])])       # 空白结论
 
-    await pipeline_mod.TaskPipeline(tasks, pool, SandboxAgent(llm), rep).run_task(task.id)
+    class AlwaysEmptyLLM:
+        async def chat(self, messages, tools=None):
+            return LLMResult(text="   ", tool_calls=[])       # 补调后仍空白
 
-    assert task.status == TaskStatus.FAILED and "排查未产出结论" in task.error
+    await pipeline_mod.TaskPipeline(tasks, pool, SandboxAgent(AlwaysEmptyLLM()), rep).run_task(task.id)
+
+    # agent 已给出诊断性 error（补调后仍空），管线透传而非用兜底文案
+    assert task.status == TaskStatus.FAILED and "空响应" in task.error
     assert any(c[0] == "finished" and c[2] == "failed" for c in rep.calls)
 
 

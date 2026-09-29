@@ -17,6 +17,7 @@ from app.sandbox.llm import LLMResult, SandboxLLMClient
 from app.sandbox.prompts import (
     BUDGET_HALF_NOTICE,
     BUDGET_HIGH_NOTICE,
+    EMPTY_SUMMARY_NUDGE,
     FORCE_SUMMARY_NUDGE,
     LOOP_SOFT_NUDGE,
     LOOP_WARNING,
@@ -196,6 +197,22 @@ class SandboxAgent:
                 llm_out: LLMResult = await self._llm.chat(messages, None if strip else tools)
 
                 if not llm_out.tool_calls:
+                    # 空交卷兜底：无工具调用但正文空白，不直接当交付（推理模型
+                    # reasoning 耗尽预算、content 为空的边界，任务 #dccfa430）。
+                    # 注入 nudge 无工具补调一次，仍为空才如实落 failed。
+                    if not llm_out.text.strip():
+                        messages.append({"role": "assistant", "content": None})
+                        messages.append({"role": "user", "content": EMPTY_SUMMARY_NUDGE})
+                        rescued = await self._llm.chat(messages, tools=None)
+                        if rescued.text.strip():
+                            llm_out = rescued
+                        else:
+                            result = SandboxRunResult(
+                                status="failed", steps_used=guard.steps,
+                                exit_reason="natural",
+                                error="空响应：末轮无工具调用且正文为空，补调索要结论后仍为空",
+                            )
+                            break
                     result = SandboxRunResult(
                         status="done", summary=llm_out.text,
                         steps_used=guard.steps, exit_reason="natural",
