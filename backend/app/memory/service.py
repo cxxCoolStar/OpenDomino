@@ -178,6 +178,13 @@ class SQLiteMemoryService:
         self._chroma_col = None
         self._knowledge: KnowledgeBase | None = None  # L3 惰性初始化（首次 search）
 
+    async def aclose(self) -> None:
+        """释放引擎与向量库句柄；Windows 下不释放会导致 SQLite/Chroma 文件无法删除。"""
+        if self._chroma is not None:
+            self._chroma = None
+            self._chroma_col = None
+        await self._engine.dispose()
+
     async def init(self) -> None:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
