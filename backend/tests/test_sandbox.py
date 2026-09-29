@@ -206,6 +206,36 @@ async def test_agent_budget_exhausted_force_summary(monkeypatch):
     assert r.status == "summary" and "未跑完" in r.summary and r.exit_reason == "budget_exhausted"
 
 
+@pytest.mark.asyncio
+async def test_agent_budget_notice_injected_once_per_level(monkeypatch):
+    """预算中途提醒：过半/80% 各注入一次 user 消息并落事件，模型收敛后自然完成。"""
+    from app.sandbox.prompts import BUDGET_HALF_NOTICE, BUDGET_HIGH_NOTICE
+
+    monkeypatch.setattr(agent_mod.settings, "sandbox_max_steps", 4)
+
+    class NoticeLLM:
+        def __init__(self):
+            self.n = 0
+
+        async def chat(self, messages, tools=None):
+            self.n += 1
+            if self.n <= 3:   # 3 步后第 2 步已过半、第 4 步未到，验证 half 档
+                return LLMResult(text="", tool_calls=[ToolCall(id=str(self.n), name="list_dir", args={"n": self.n})])
+            assert sum(BUDGET_HALF_NOTICE.format(used=2, total=4) == m.get("content") for m in messages) == 1
+            return LLMResult(text="提前收敛完成", tool_calls=[])
+
+    events: list[tuple[str, str]] = []
+
+    async def on_event(_stage, kind, summary):
+        events.append((kind, summary))
+
+    r = await SandboxAgent(NoticeLLM()).run(
+        make_task(), ToolContext(executor=FakeExecutor()), on_event=on_event)
+    assert r.status == "done" and r.steps_used == 3
+    kinds = [k for k, _ in events]
+    assert "budget_notice" in kinds
+
+
 # ---------- storage：CRUD + 恢复 ----------
 
 

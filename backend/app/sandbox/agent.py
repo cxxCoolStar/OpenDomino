@@ -10,11 +10,13 @@ import hashlib
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.config import settings
 from app.sandbox.llm import LLMResult, SandboxLLMClient
 from app.sandbox.prompts import (
+    BUDGET_HALF_NOTICE,
+    BUDGET_HIGH_NOTICE,
     FORCE_SUMMARY_NUDGE,
     LOOP_WARNING,
     STEER_PREFIX,
@@ -34,7 +36,9 @@ _STEER_PREVIEW_CHARS = 80
 class StepGuard:
     """反死循环三重保护状态（阈值取 fastclaw 实测值）。"""
 
-    max_steps: int = settings.sandbox_max_steps
+    # default_factory 惰性读 settings：测试 monkeypatch settings 才能生效
+    # （类属性默认值会在导入时固化 settings 快照，改配置失效）
+    max_steps: int = field(default_factory=lambda: settings.sandbox_max_steps)
     steps: int = 0
 
     same_call_limit: int = settings.sandbox_loop_same_call_limit
@@ -47,6 +51,8 @@ class StepGuard:
 
     all_failed_limit: int = 3
     all_failed_rounds: int = 0
+
+    _notified: int = 0   # 预算提醒已触发的档位（0 无 / 1 过半 / 2 80%）
 
     def observe_call(self, name: str, args: dict, output: str) -> str | None:
         """记录一次调用。返回触发的护栏名（无则 None）。"""
@@ -90,6 +96,22 @@ class StepGuard:
     @property
     def budget_exhausted(self) -> bool:
         return self.steps >= self.max_steps
+
+    def budget_notice(self) -> str | None:
+        """预算中途提醒（确定性、每档只触发一次）：过半催收窄，80% 催收敛。
+
+        模型全程感知不到剩余步数是排查任务烧光预算的直接原因之一；
+        在迭代边界注入（不是系统提示）保证剩余额度是最新事实而非开局快照。
+        """
+        used = self.steps
+        half, high = self.max_steps // 2, self.max_steps * 8 // 10
+        if used >= high and self._notified < 2:
+            self._notified = 2
+            return "high"
+        if used >= half and self._notified < 1:
+            self._notified = 1
+            return "half"
+        return None
 
 
 @dataclass
@@ -143,6 +165,18 @@ class SandboxAgent:
                         canceled = True
                         await emit("cancel_requested", "收到取消请求，停止执行并汇总已有进展")
                         break
+
+                # 预算中途提醒：与 steer 同一迭代边界注入，确定性触发、每档一次
+                notice_level = guard.budget_notice()
+                if notice_level == "high":
+                    notice_text = BUDGET_HIGH_NOTICE.format(
+                        left=guard.max_steps - guard.steps, used=guard.steps, total=guard.max_steps)
+                    messages.append({"role": "user", "content": notice_text})
+                    await emit("budget_notice", notice_text)
+                elif notice_level == "half":
+                    notice_text = BUDGET_HALF_NOTICE.format(used=guard.steps, total=guard.max_steps)
+                    messages.append({"role": "user", "content": notice_text})
+                    await emit("budget_notice", notice_text)
 
                 # 摘工具判断（循环头）：护栏触发时本轮不传工具并注入 nudge
                 strip = guard.should_strip_tools
