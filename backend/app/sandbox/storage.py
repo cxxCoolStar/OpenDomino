@@ -131,6 +131,25 @@ class TaskService:
             ).scalars().all()
             return [_task_from_row(r) for r in rows]
 
+    async def recent_events(self, task_id: str, *, limit: int = 5) -> list[TaskEvent]:
+        """某任务最近 N 条事件（seq 降序取再正序返回），进展查询用（ADR-010）。"""
+        async with self._session() as s:
+            rows = (
+                await s.execute(
+                    select(TaskEventRow)
+                    .where(TaskEventRow.task_id == task_id)
+                    .order_by(TaskEventRow.seq.desc())
+                    .limit(limit)
+                )
+            ).scalars().all()
+            return [
+                TaskEvent(
+                    stage=r.stage, kind=r.kind, summary=r.summary,
+                    trace_id=r.trace_id, seq=int(r.seq), created_at=r.created_at,
+                )
+                for r in reversed(rows)
+            ]
+
     # ---- 状态流转 ----
 
     async def set_status(self, task_id: str, status: TaskStatus, *, error: str = "") -> None:
@@ -190,7 +209,9 @@ class TaskService:
     async def append_event(
         self, task_id: str, stage: TaskStage | str, kind: str, summary: str, *, trace_id: str = ""
     ) -> None:
-        """只追加事件。seq 服务端分配（同 task 内自增）。"""
+        """只追加事件。seq 服务端分配（同 task 内自增）；顺带刷新任务 updated_at
+        作为活跃时间戳（ADR-010：停滞判断与「已耗时」展示复用，不新增列）。"""
+        now = time.time()
         async with self._session() as s:
             last = (
                 await s.execute(
@@ -209,8 +230,11 @@ class TaskService:
                     kind=kind,
                     summary=summary,
                     trace_id=trace_id,
-                    created_at=time.time(),
+                    created_at=now,
                 )
+            )
+            await s.execute(
+                update(TaskRow).where(TaskRow.id == task_id).values(updated_at=now)
             )
             await s.commit()
 

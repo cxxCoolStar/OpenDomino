@@ -22,6 +22,9 @@ _STRIP_TOOLS_NUDGE = (
     "与未竟事项，不要尝试再调用任何工具。"
 )
 
+# steer 投递前缀（ADR-010）：独立 user 消息注入，模型据此在中途调整方向
+STEER_PREFIX = "[中途指示] "
+
 
 def build_system_prompt(task: Task, *, repo_conventions: str = "", skill_catalog: str = "") -> str:
     parts = [

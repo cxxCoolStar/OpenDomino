@@ -36,6 +36,9 @@ class EventKind(str, Enum):
     STAGE_ENTER = "stage_enter"
     STAGE_EXIT = "stage_exit"
     TOOL_SUMMARY = "tool_summary"
+    TOOL_ERROR = "tool_error"
+    STEER_APPLIED = "steer_applied"
+    CANCEL_REQUESTED = "cancel_requested"
     ERROR = "error"
 
 

@@ -17,6 +17,7 @@ from app.sandbox.llm import LLMResult, SandboxLLMClient
 from app.sandbox.prompts import (
     FORCE_SUMMARY_NUDGE,
     LOOP_WARNING,
+    STEER_PREFIX,
     STRIP_TOOLS_NUDGE,
     build_system_prompt,
 )
@@ -24,6 +25,9 @@ from app.sandbox.tools import ToolContext, build_tool_definitions, dispatch_tool
 from app.sandbox.types import Task, TaskStage
 
 log = logging.getLogger(__name__)
+
+# steer 摘要预览长度（一行事件，非全文——全文在对话里，模型看得到）
+_STEER_PREVIEW_CHARS = 80
 
 
 @dataclass
@@ -101,11 +105,22 @@ class SandboxAgent:
     def __init__(self, llm: SandboxLLMClient) -> None:
         self._llm = llm
 
-    async def run(self, task: Task, ctx: ToolContext, *, on_event=None) -> SandboxRunResult:
-        """执行一个任务。on_event(stage, kind, summary) 用于 TaskEvent 留痕。"""
+    async def run(self, task: Task, ctx: ToolContext, *, on_event=None, control=None) -> SandboxRunResult:
+        """执行一个任务。
+
+        on_event(stage, kind, summary)：TaskEvent 留痕（ADR-010：每次工具调用
+        后触发一次，由管线落库；回调异常绝不影响执行）。
+        control：TaskControl 管控面——迭代边界 drain steer 文本、查取消标志。
+        """
         on_event = on_event or (lambda *a, **k: None)
         started = time.time()
         guard = StepGuard()
+
+        async def emit(kind: str, summary: str) -> None:
+            try:
+                await on_event(TaskStage.EXECUTE, kind, summary)
+            except Exception:  # noqa: BLE001 —— 留痕失败不影响执行（学习 hermes _safe_progress）
+                log.debug("on_event failed task=%s", task.id)
 
         messages: list[dict] = [
             {"role": "system", "content": build_system_prompt(task)},
@@ -113,9 +128,22 @@ class SandboxAgent:
         ]
         tools = build_tool_definitions()
 
+        canceled = False
         result = SandboxRunResult(status="failed", exit_reason="error")
         try:
             while True:
+                # 管控边界（ADR-010）：上轮工具结果已回填、下次 LLM 调用前——
+                # 注入 steer 文本、感知取消请求。当前工具调用永不被打断。
+                if control is not None:
+                    steers = await control.drain_steer(task.id)
+                    for s in steers:
+                        messages.append({"role": "user", "content": f"{STEER_PREFIX}{s}"})
+                        await emit("steer_applied", f"中途指示已注入：{s[:_STEER_PREVIEW_CHARS]}")
+                    if await control.cancel_requested(task.id):
+                        canceled = True
+                        await emit("cancel_requested", "收到取消请求，停止执行并汇总已有进展")
+                        break
+
                 # 摘工具判断（循环头）：护栏触发时本轮不传工具并注入 nudge
                 strip = guard.should_strip_tools
                 if strip:
@@ -153,6 +181,11 @@ class SandboxAgent:
                     guard.observe_result(tc.name, failed)
                     if not failed:
                         all_failed = False
+                    # 进展留痕（ADR-010）：每次工具调用一行摘要，落库由管线承担
+                    if failed:
+                        await emit("tool_error", f"{tc.name} 失败：{_preview_args(tc.args)}")
+                    else:
+                        await emit("tool_summary", f"{tc.name} {_preview_args(tc.args)}")
                     if verdict == "same_call_loop":
                         messages.append({"role": "user", "content": LOOP_WARNING})
                 guard.observe_round(all_failed)
@@ -182,8 +215,13 @@ class SandboxAgent:
                 exit_reason="error", error=f"{type(e).__name__}: {e}",
             )
 
-        on_event(TaskStage.EXECUTE, "stage_exit",
-                 f"执行循环结束（{result.exit_reason}，{result.steps_used} 步）")
+        if canceled:
+            # 协作式取消：对已有进展做保底汇总，状态交由管线落 CANCELED
+            result.summary = await self._force_summary(messages)
+            result.exit_reason = "canceled"
+            result.steps_used = guard.steps
+        exit_line = "（收到取消，已停止并汇总）" if canceled else f"执行循环结束（{result.exit_reason}，{result.steps_used} 步）"
+        await emit("stage_exit", exit_line)
         return result
 
     async def _force_summary(self, messages: list[dict]) -> str:
@@ -206,6 +244,15 @@ def _is_failed_result(output: str) -> bool:
     except (json.JSONDecodeError, ValueError):
         return False
     return isinstance(data, dict) and "error" in data
+
+
+def _preview_args(args: dict, limit: int = 80) -> str:
+    """工具调用的一行参数预览（事件摘要用，非全文）。"""
+    if not args:
+        return ""
+    first = next(iter(args.values()))
+    text = str(first).replace("\n", " ").strip()
+    return text[:limit] + ("…" if len(text) > limit else "")
 
 
 def _trim_history(messages: list[dict]) -> None:

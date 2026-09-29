@@ -1,7 +1,11 @@
-"""任务执行管线（ADR-004 详细设计 §管线）：把全部沙箱模块串成 run_task。
+"""任务执行管线（ADR-004 详细设计 §管线；ADR-010 事件落库与中途管控）。
 
 流程：领取任务 → 取容器 → 建分支 → 执行循环 → 提交 push → 待评审回传。
 验证（AI review）与回炉留接口，一期以预评审替代（ADR-004 非目标：不自动合并）。
+
+ADR-010 增补：执行期工具事件真正落 TaskEvent 表；TaskControl 绑定后，
+steer 在迭代边界注入、cancel 协作退出落 CANCELED 终态，未消费的 steer
+作为 missed 报告回群。
 """
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ from app.config import settings
 from app.sandbox import git_ops
 from app.sandbox.agent import SandboxAgent
 from app.sandbox.container import ContainerPool
+from app.sandbox.control import TaskControl
 from app.sandbox.reporter import TaskReporter
 from app.sandbox.storage import TaskService
 from app.sandbox.tools import ToolContext
@@ -30,12 +35,14 @@ class TaskPipeline:
         agent: SandboxAgent,
         reporter: TaskReporter,
         memory=None,
+        control: TaskControl | None = None,
     ) -> None:
         self.tasks = tasks
         self.pool = pool
         self.agent = agent
         self.reporter = reporter
         self._memory = memory      # 可选：L2 绑定解析（M:N 仓库解析主路径）
+        self.control = control or TaskControl()   # 管控面：ConsoleAgent 经此下发 steer/cancel
 
     async def run_task(self, task_id: str) -> None:
         task = await self.tasks.get(task_id)
@@ -48,6 +55,7 @@ class TaskPipeline:
 
         await self.tasks.set_status(task_id, TaskStatus.RUNNING)
         await self.tasks.append_event(task_id, TaskStage.SETUP, "stage_enter", "开始准备执行环境")
+        await self.control.bind(task_id)
 
         executor = None
         try:
@@ -72,11 +80,23 @@ class TaskPipeline:
             # 执行循环
             ctx = ToolContext(executor=executor, repo=task.repo, task_id=task_id)
             started = time.time()
-            result = await self.agent.run(task, ctx, on_event=self._on_event(task))
+            result = await self.agent.run(
+                task, ctx, on_event=self._on_event(task_id), control=self.control
+            )
             log.info(
                 "loop finished task=%s status=%s steps=%d %.1fs",
                 task_id, result.status, result.steps_used, time.time() - started,
             )
+
+            # 协作式取消（ADR-010）：跳过交付链，落 CANCELED 终态并回群
+            if result.exit_reason == "canceled":
+                await self.tasks.append_event(
+                    task_id, TaskStage.EXECUTE, "stage_exit", "任务已取消，已汇总中断前进展"
+                )
+                await self.tasks.finish(task_id, TaskStatus.CANCELED)
+                task.status = TaskStatus.CANCELED
+                await self.reporter.finished(task)
+                return
 
             if result.status == "failed":
                 await self.tasks.finish(task_id, TaskStatus.FAILED, error=result.error)
@@ -127,14 +147,27 @@ class TaskPipeline:
             task.error = f"{type(e).__name__}: {e}"
             await self.reporter.finished(task)
         finally:
+            await self._report_missed_steer(task_id)
             if executor is not None:
                 await self.pool.release(task.repo, executor)
 
-    @staticmethod
-    def _on_event(task: Task):
+    async def _report_missed_steer(self, task_id: str) -> None:
+        """任务结束仍未消费的 steer 文本回群告知（ADR-010 missed 语义）。
+
+        unbind 兼职做 leftover 收集：注销通道时返回未消费文本，避免双读竞态。
+        """
+        missed = await self.control.unbind(task_id)
+        if missed:
+            task = await self.tasks.get(task_id)
+            if task is not None:
+                await self.reporter.steer_missed(task, missed)
+
+    def _on_event(self, task_id: str):
+        """执行循环事件落库（ADR-010：此前是 pass 空函数，TaskEvent 执行期为空）。"""
+
         async def _emit(stage: TaskStage, kind: str, summary: str) -> None:
-            # agent 回调是同步 lambda 兼容；此处转 async append_event
-            pass  # 事件经 agent 内部 on_event 同步收集，由 reporter.event 落库
+            await self.tasks.append_event(task_id, stage, kind, summary)
+
         return _emit
 
     async def _run_investigate(self, task_id: str, task: Task, executor, base_ref: str) -> None:
@@ -146,11 +179,20 @@ class TaskPipeline:
 
         ctx = ToolContext(executor=executor, repo=task.repo, task_id=task_id)
         started = time.time()
-        result = await self.agent.run(task, ctx, on_event=self._on_event(task))
+        result = await self.agent.run(
+            task, ctx, on_event=self._on_event(task_id), control=self.control
+        )
         log.info(
             "investigate loop finished task=%s status=%s steps=%d %.1fs",
             task_id, result.status, result.steps_used, time.time() - started,
         )
+
+        # 协作式取消（ADR-010）：排查任务同样可中途取消
+        if result.exit_reason == "canceled":
+            await self.tasks.finish(task_id, TaskStatus.CANCELED)
+            task.status = TaskStatus.CANCELED
+            await self.reporter.finished(task)
+            return
 
         if result.status == "failed" or not result.summary.strip():
             error = result.error or "排查未产出结论"

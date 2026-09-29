@@ -78,6 +78,31 @@ class TaskReporter:
         else:  # canceled
             await self._notify(task, f"🚫 任务 #{_short(task.id)} 已取消：{task.title}")
 
+    async def steer_accepted(self, task: Task) -> None:
+        """中途指示已受理（ADR-010）：在任务下一步生效，结束前送达可能变成 missed。"""
+        await self._notify(
+            task,
+            f"💬 已收到对任务 #{_short(task.id)} 的中途指示，将在当前步骤结束后传给执行中的任务。"
+            f"若任务在此之前结束，我会再告诉你。",
+        )
+
+    async def steer_missed(self, task: Task, missed: list[str]) -> None:
+        """任务结束仍未消费的 steer 文本回群告知（ADR-010 missed 语义）。"""
+        preview = "；".join(m[:50] for m in missed[:3])
+        await self._notify(
+            task,
+            f"⚠️ 任务 #{_short(task.id)} 已结束（{task.status.value}），中途指示未能生效：{preview}。"
+            f"如仍需要，请重新提出或新起任务。",
+        )
+
+    async def cancel_accepted(self, task: Task) -> None:
+        """取消请求已受理（ADR-010）：当前步骤结束后停止，进展保底汇总。"""
+        await self._notify(
+            task,
+            f"🛑 已收到任务 #{_short(task.id)} 的取消请求，当前步骤结束后停止，"
+            f"已有进展会汇总后同步。",
+        )
+
     async def event(self, task: Task, stage: TaskStage, kind: str, summary: str) -> None:
         """非关键事件：只落 TaskEvent，不推群（ADR-004：不做心跳播报）。"""
         log.info("task event: id=%s stage=%s kind=%s %s", task.id, stage, kind, summary[:100])
