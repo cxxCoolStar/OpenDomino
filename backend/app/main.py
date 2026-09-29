@@ -14,9 +14,11 @@ from app.console.agent import ConsoleAgent
 from app.console.distiller import Distiller
 from app.console.llm import OpenAIClient
 from app.console.router import Router
+from app.console.task_ops import TaskOpHandler
 from app.memory.service import SQLiteMemoryService
 from app.sandbox.agent import SandboxAgent
 from app.sandbox.container import ContainerPool
+from app.sandbox.control import TaskControl
 from app.sandbox.executor import TaskExecutor
 from app.sandbox.llm import OpenAIChatClient
 from app.sandbox.pipeline import TaskPipeline
@@ -64,7 +66,7 @@ async def lifespan(app: FastAPI):
         except Exception:  # noqa: BLE001 —— 旁听落库失败不影响主管线
             log.exception("save_observed failed chat_id=%s", chat_id)
 
-    # ---- Sandbox 侧装配（ADR-004）----
+    # ---- Sandbox 侧装配（ADR-004；ADR-010 管控面）----
     tasks = TaskService()
     await tasks.init()
     registry = ChannelRegistry()
@@ -72,7 +74,8 @@ async def lifespan(app: FastAPI):
     pool = ContainerPool()
     pool.start_sweeper()
     sandbox_agent = SandboxAgent(OpenAIChatClient())
-    pipeline = TaskPipeline(tasks, pool, sandbox_agent, reporter, memory=memory)
+    control = TaskControl()
+    pipeline = TaskPipeline(tasks, pool, sandbox_agent, reporter, memory=memory, control=control)
     executor = TaskExecutor(pipeline.run_task)
 
     # 重启恢复：pending 续跑，running/review 标失败（详细设计 §2.3）
@@ -91,7 +94,34 @@ async def lifespan(app: FastAPI):
         await reporter.accepted(await tasks.get(task_id))
         return task_id
 
-    agent = ConsoleAgent(memory=memory, router=router, reply=reply, delegate=delegate)
+    # ADR-010：任务查询与中途管控（status/steer/cancel）的确定性执行入口
+    task_op_handler = TaskOpHandler(tasks, control)
+
+    async def task_op(chat_id: str, op: str, task_id: str, message: str) -> str:
+        """ConsoleAgent 的 TaskOpFn：校验（归属/状态）在 handler 内，这里只转发。"""
+        return await task_op_handler.handle(chat_id, op, task_id, message)
+
+    agent = ConsoleAgent(memory=memory, router=router, reply=reply, delegate=delegate, task_op=task_op)
+
+    # ADR-010：上下文状态段活化——装配器经此闭包把裸任务 ID 渲染为实时状态
+    async def task_status_section(task_ids: list[str]) -> str:
+        lines: list[str] = []
+        for tid in task_ids:
+            t = await tasks.get(tid)
+            if t is None:
+                continue
+            icon = {"pending": "排队中", "running": "执行中", "review": "待评审",
+                    "done": "已完成", "failed": "失败", "canceled": "已取消"}.get(t.status.value, t.status.value)
+            cost = ""
+            if t.created_at:
+                seconds = max(0, int((t.updated_at or 0) - t.created_at))
+                cost = f"，已 {seconds // 60} 分钟" if seconds >= 60 else f"，已 {seconds} 秒"
+            last_event = await tasks.recent_events(tid, limit=1)
+            recent = f"；最近：{last_event[-1].summary[:40]}" if last_event else ""
+            lines.append(f"# {tid[:8]} {icon}{cost}{recent}")
+        return "[进行中任务]\n" + "\n".join(lines) if lines else ""
+
+    agent._assembler.set_task_status_fn(task_status_section)
     channel = FeishuChannel(on_message=on_message, save_observed=save_observed)
     # channel 需先创建再注册进 registry（reply 闭包已持有引用）
     registry.register(channel)
@@ -109,7 +139,22 @@ async def lifespan(app: FastAPI):
     app.state.feishu_channel = channel
     app.state.task_service = tasks
     app.state.task_executor = executor
+    app.state.task_control = control
     app.state.container_pool = pool
+
+    # 知识库文档自动同步（ADR-011）：启动先跑一轮，之后周期轮询；独立 KB 实例
+    syncer = None
+    if settings.kbsync_enabled:
+        from app.docs.knowledge import KnowledgeBase
+        from app.docs.syncer import build_default_syncer
+
+        sync_kb = KnowledgeBase()
+        await sync_kb.init()
+        syncer = build_default_syncer(sync_kb)
+    if syncer is not None:
+        syncer.start()
+    app.state.kb_syncer = syncer
+
     ws_task = asyncio.create_task(channel.start(), name="feishu-ws")
     log.info("OpenDomino started; Feishu WS connecting")
     if settings.distiller_enabled:
@@ -122,6 +167,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await distiller.stop()
+        if syncer is not None:
+            await syncer.stop()
         for t in (ws_task, backfill_task):
             t.cancel()
             try:

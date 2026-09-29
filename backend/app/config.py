@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     distill_failure_retry_minutes: int = 30 # 蒸馏失败后重试冷却
     distill_batch_max: int = 200            # 单次蒸馏消息数上限（最老优先，积压分批推进）
 
+    # ---- ADR-011 知识库文档自动同步 ----
+    kbsync_enabled: bool = True             # 总开关；false 不启动同步循环
+    kbsync_interval_seconds: int = 300      # 扫描间隔（docs 为 git 管理的低频内容，5 分钟延迟足够）
+    docs_root: str = "../docs"              # 本地文档源根目录（相对 backend 运行目录）
+
     # ---- ADR-004 SandboxAgent ----
     sandbox_docker_image: str = "opendomino-sandbox:latest"  # 预装 git + /workspace（构建脚本见 handoff）
     sandbox_max_steps: int = 40
@@ -80,6 +85,7 @@ class Settings(BaseSettings):
     sandbox_tool_output_max_chars: int = 8000   # 单次工具输出截断（ADR-004 表）
     sandbox_history_trim_chars: int = 60000     # 执行循环历史裁剪阈值
     sandbox_history_keep_recent: int = 6        # 裁剪时保留最近 N 步工具结果
+    sandbox_stale_minutes: int = 10             # running 且超 N 分钟无新事件视为疑似停滞（ADR-010）
     sandbox_cpus: float = 2.0
     sandbox_mem_limit: str = "2g"
     sandbox_sweep_interval_seconds: int = 30

@@ -24,6 +24,7 @@
 - [ADR-002 三层记忆：Session、KBase 与正式知识库](docs/decisions/002-memory-layer.md)
 - [ADR-008 协作入口层迁移飞书与群聊旁听上下文](docs/decisions/008-feishu-channel.md)
 - [ADR-009 旁听结论蒸馏：群聊讨论经确认沉淀为团队记忆](docs/decisions/009-overheard-distillation.md)
+- [ADR-011 知识库文档自动同步：周期扫描 + Source 抽象 + 镜像删除](docs/decisions/011-kb-doc-sync.md)
 
 ## 知识库文档规范（docs/ 下所有 Markdown 必须遵守）
 

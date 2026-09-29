@@ -1,0 +1,111 @@
+{
+  "cases": [
+    {
+      "name": "首轮全量导入 created=3",
+      "ok": true,
+      "detail": "stat={'created': 3, 'updated': 0, 'skipped': 0, 'failed': 0, 'deleted': 0, 'chunks': 6}"
+    },
+    {
+      "name": "首轮无删除",
+      "ok": true,
+      "detail": "stat={'created': 3, 'updated': 0, 'skipped': 0, 'failed': 0, 'deleted': 0, 'chunks': 6}"
+    },
+    {
+      "name": "KB 含本地+前缀源共 3 篇",
+      "ok": true,
+      "detail": "ids=['doc_a.md', 'doc_b.md', 'feishu/doc1']"
+    },
+    {
+      "name": "二轮全部 skipped",
+      "ok": true,
+      "detail": "stat={'created': 0, 'updated': 0, 'skipped': 3, 'failed': 0, 'deleted': 0, 'chunks': 0}"
+    },
+    {
+      "name": "内容变更触发 updated",
+      "ok": true,
+      "detail": "stat={'created': 0, 'updated': 1, 'skipped': 2, 'failed': 0, 'deleted': 0, 'chunks': 2}"
+    },
+    {
+      "name": "检索命中新内容",
+      "ok": true,
+      "detail": "hits=[('doc_a.md', '## 部署方式\\n\\n服务改用 Podman 部署，镜像名 op'), ('feishu/doc1', '# 云文档一'), ('feishu/doc1', '## 要点\\n\\n云端内容正文。'), ('doc_b.md', '## 备份策略\\n\\n数据库每日凌晨三点全量备份到对象存储。'), ('doc_a.md', '# 文档A'), ('doc_b.md', '# 文档B')]"
+    },
+    {
+      "name": "旧内容不再命中 doc_a（仅 doc_b 无关或无命中）",
+      "ok": true,
+      "detail": "hits=[('doc_a.md', '## 部署方式\\n\\n服务改用 Podman 部署，镜像名 op'), ('feishu/doc1', '# 云文档一'), ('doc_a.md', '# 文档A'), ('feishu/doc1', '## 要点\\n\\n云端内容正文。'), ('doc_b.md', '# 文档B'), ('doc_b.md', '## 备份策略\\n\\n数据库每日凌晨三点全量备份到对象存储。')]"
+    },
+    {
+      "name": "缺席文档触发 deleted=1",
+      "ok": true,
+      "detail": "stat={'created': 0, 'updated': 0, 'skipped': 2, 'failed': 0, 'deleted': 1, 'chunks': 0}"
+    },
+    {
+      "name": "删除后 KB 只剩 2 篇",
+      "ok": true,
+      "detail": "ids=['doc_a.md', 'feishu/doc1']"
+    },
+    {
+      "name": "已删文档检索不命中",
+      "ok": true,
+      "detail": "hits=[('feishu/doc1', '# 云文档一'), ('feishu/doc1', '## 要点\\n\\n云端内容正文。'), ('doc_a.md', '# 文档A'), ('doc_a.md', '## 部署方式\\n\\n服务改用 Podman 部署，镜像名 op')]"
+    },
+    {
+      "name": "新增文档 created=1（含子目录）",
+      "ok": true,
+      "detail": "stat={'created': 1, 'updated': 0, 'skipped': 2, 'failed': 0, 'deleted': 0, 'chunks': 2}"
+    },
+    {
+      "name": "带前缀源文档存活",
+      "ok": true,
+      "detail": "ids=['doc_a.md', 'feishu/doc1', 'sub/doc_c.md']"
+    },
+    {
+      "name": "前缀源清空只删前缀命名空间",
+      "ok": true,
+      "detail": "stat={'created': 0, 'updated': 0, 'skipped': 2, 'failed': 0, 'deleted': 1, 'chunks': 0} ids=['doc_a.md', 'sub/doc_c.md']"
+    },
+    {
+      "name": "同 doc_id 同内容 CLI 侧 skipped（兼容不重复建条目）",
+      "ok": true,
+      "detail": "stat={'doc': 'doc_a.md', 'action': 'skipped', 'chunks': 0, 'warnings': []}"
+    },
+    {
+      "name": "前缀源恢复后重新入库",
+      "ok": true,
+      "detail": "stat={'created': 1, 'updated': 0, 'skipped': 2, 'failed': 0, 'deleted': 0, 'chunks': 2} ids=['doc_a.md', 'feishu/doc1', 'sub/doc_c.md']"
+    },
+    {
+      "name": "fetch 失败 failed=1 其余 skipped",
+      "ok": true,
+      "detail": "stat={'created': 0, 'updated': 0, 'skipped': 2, 'failed': 1, 'deleted': 0, 'chunks': 0}"
+    },
+    {
+      "name": "失败篇不误删（仍在 KB）",
+      "ok": true,
+      "detail": "ids=['doc_a.md', 'feishu/doc1', 'sub/doc_c.md']"
+    },
+    {
+      "name": "坏文件不入 KB（list 层跳过后无残留）",
+      "ok": true,
+      "detail": "ids=['doc_a.md', 'feishu/doc1', 'sub/doc_c.md']"
+    },
+    {
+      "name": "start 后自动完成首轮导入",
+      "ok": true,
+      "detail": "ids=['doc_a.md', 'feishu/doc1', 'sub/doc_c.md']"
+    },
+    {
+      "name": "stop 后任务退出",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "MemoryService L3 检索命中同步内容",
+      "ok": true,
+      "detail": "hits=[('sub/doc_c.md', '## 日志规范\\n\\n所有服务日志统一 JSON 格式输出到 s'), ('feishu/doc1', '# 云文档一'), ('feishu/doc1', '## 要点\\n\\n云端内容正文。'), ('doc_a.md', '# 文档A'), ('sub/doc_c.md', '# 文档C'), ('doc_a.md', '## 部署方式\\n\\n服务改用 Podman 部署，镜像名 op')]"
+    }
+  ],
+  "pass": 21,
+  "fail": 0
+}

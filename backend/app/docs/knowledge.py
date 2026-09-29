@@ -96,10 +96,14 @@ class KnowledgeBase:
     # ---- 导入 ----
 
     async def import_document(self, path: Path, root: Path | None = None) -> dict:
-        """导入单篇 Markdown。哈希未变跳过；变化则失效旧块重建。返回统计。"""
+        """导入单篇 Markdown 文件。文件版薄壳：读文件后走 import_text（ADR-011）。"""
         text = path.read_text(encoding="utf-8")
-        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         doc_id = str(path.relative_to(root).as_posix()) if root else path.name
+        return await self.import_text(doc_id, text, source_path=str(path))
+
+    async def import_text(self, doc_id: str, text: str, *, source_path: str = "") -> dict:
+        """按 doc_id 导入文本（ADR-011 核心入口）。哈希未变跳过；变化则失效旧块重建。"""
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         title = _extract_title(text)
 
         async with self._session() as s:
@@ -110,7 +114,7 @@ class KnowledgeBase:
                 return {"doc": doc_id, "action": "skipped", "chunks": 0, "warnings": []}
             if row is None:
                 row = DocRow(doc_id=doc_id, title=title, content_hash=content_hash,
-                             source_path=str(path), created_at=time.time())
+                             source_path=source_path, created_at=time.time())
                 s.add(row)
                 action = "created"
             else:
@@ -152,6 +156,35 @@ class KnowledgeBase:
             "doc": doc_id, "action": action, "chunks": len(chunks),
             "warnings": collect_warnings(chunks),
         }
+
+    async def delete_document(self, doc_id: str) -> bool:
+        """镜像删除（ADR-011）：文档缺席时删其行、块、FTS 行与向量。返回是否确有删除。"""
+        async with self._session() as s:
+            row = await s.get(DocRow, doc_id)
+            if row is None:
+                return False
+            await s.delete(row)
+            old = (await s.execute(select(ChunkRow).where(ChunkRow.doc_id == doc_id))).scalars().all()
+            for c in old:
+                await s.delete(c)
+                await s.execute(
+                    sa_text("DELETE FROM doc_chunks_fts WHERE chunk_id = :cid"),
+                    {"cid": c.chunk_id},
+                )
+            await s.commit()
+
+        if self._chroma_col is not None:
+            try:
+                self._chroma_col.delete(where={"doc_id": doc_id})
+            except Exception:  # noqa: BLE001
+                log.warning("chroma delete failed for %s (fts/sql legs deleted)", doc_id)
+        return True
+
+    async def list_doc_ids(self) -> list[str]:
+        """知识库现有全部 doc_id（镜像删除的缺席判定用）。"""
+        async with self._session() as s:
+            rows = await s.execute(select(DocRow.doc_id))
+            return [r[0] for r in rows.fetchall()]
 
     async def _index_vectors(self, doc_id: str, chunks: list[Chunk], version: int, old_chunk_ids: list[str]) -> None:
         if old_chunk_ids:
