@@ -131,7 +131,7 @@ _SCHEMAS: dict[str, dict] = {
         "name": "write_file",
         "description": (
             "整体写入一个文件（覆盖已有内容；目录不存在会自动创建）。"
-            "用于新建文件或放弃增量修补时整体重写；对已有文件做局部修改优先 apply_patch。"
+            "用于新建文件或放弃增量修补时整体重写；对已有文件做局部修改优先 patch_replace。"
             "写入成功后文件即已更新，无需重读确认。"
         ),
         "parameters": {
