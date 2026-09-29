@@ -48,6 +48,13 @@ L3 知识库做切块检索，文档结构直接决定检索质量。要点：
 - Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact.
 - If you must test a system in isolation, FIRST write all the ways it could fail, THEN write the code.
 
+## 提交纪律
+
+每完成一个独立的功能或 bug 修复，立即进行一次 commit：
+
+1. **一个 commit 一个主题**：一次 commit 只包含一个独立功能或一个 bug 修复的改动，不与其他改动混在一起；
+2. **完成即提交**：功能或修复验证可用后立刻 commit，不积攒多个改动后合并提交。
+
 ## 问题修复方式（最高优先级行为规则）
 
 发现问题时（测试失败、报错、行为与预期不符），**先讨论再动手**，不要径自修复：
