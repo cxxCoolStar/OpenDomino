@@ -1,7 +1,7 @@
 # OpenDomino 开发交接
 
-> 更新日期：2026-09-23（第二次更新；2026-09-29 校订：协作入口已由钉钉迁移至飞书，通道相关描述已按 ADR-008 更新）
-> 当前阶段：**真实飞书 → LLM → 飞书回复闭环（ADR-008 已实测修复上线）**；ADR-002 Phase 0（记忆确认流 + 上下文装配重构 + 并发修复）已实现并上线；**SandboxAgent（ADR-004）全模块已落地（2026-09-23，Fake 测试全绿，Docker 集成待真机验证）**。
+> 更新日期：2026-09-29（第三次更新：清理过时结论——SandboxAgent、L3 检索、Phase A/C、蒸馏、任务管控、KB 自动同步均已落地；补当前真实缺口清单）
+> 当前阶段：**核心闭环已通**——飞书群 @ 提问 → ConsoleAgent 路由 → SandboxAgent 真实仓库交付 → 回传群聊，三层记忆与旁听/蒸馏/管控/KB 同步全部上线；剩余缺口见「尚未实施」。
 
 ## 项目目标
 
@@ -19,12 +19,14 @@ OpenDomino 复刻「从群聊提问到任务交付」的团队级 Agent 基础�
 - **L1 Session**：SQLite 持久化群消息、pending 状态、活跃任务 ID 和最近路由；SQLite 数据目录会在初始化时自动创建。
 ### 记忆与知识库
 
-- **L2 KBase 基础**：草稿/确认记录可落库，普通召回只返回 confirmed 条目；当前召回是简单关键词匹配，不是 ADR 目标中的向量检索。
-- **L3 知识库**：已落地（`app/docs/knowledge.py`）——规范契约切块 + FTS5 中文 2-gram 切词 + 向量双路检索 + RRF 融合；文档经 `python -m app.docs.import_docs ../docs` 导入。
+- **L2 KBase 基础**：草稿/确认记录落库；召回三级递进（Phase C 已实现）——向量召回（方舟 embedding）→ 关键词召回（未配 embedding 时）→ 全量注入（confirmed 条目数少时）；旁听消息写 L2 存而不检索（ADR-008）。
+- **L3 知识库**：已落地（`app/docs/knowledge.py`）——规范契约切块 + FTS5 中文 2-gram 切词 + 向量双路检索 + RRF 融合；支持 `python -m app.docs.import_docs ../docs` 手动导入与周期自动同步（ADR-011，`docs/syncer.py`）。
 ### Agent 与工具
 
-- **ConsoleAgent**：单次结构化 JSON 路由；answer / clarify / delegate 三种动作；同群串行锁；pending 澄清随 Session 持久化；LLM JSON 解析失败重试一次后降级回复。
-- **ToolRegistry**：注册、toolset 过滤、check_fn、参数类型强转、统一错误与结果截断已有基础实现；尚未注册沙箱实际工具，也未接入执行循环。
+- **ConsoleAgent**：单次结构化 JSON 路由；answer / clarify / delegate / repo_op / task_op 五种动作；同群串行锁；pending 澄清随 Session 持久化；LLM JSON 解析失败重试一次后降级回复；滚动压缩（Phase A）与纠正提炼已上线。
+- **旁听蒸馏（ADR-009）**：`console/distiller.py` 水位线扫描 + LLM 蒸馏 → 非阻塞记忆提议 → 群内确认流；E2E 26 用例全绿。
+- **任务管控（ADR-010）**：`sandbox/control.py` steer/cancel + `console/task_ops.py` 查询管控 + 上下文状态段活化。
+- **ToolRegistry（ADR-006）**：`app/tools/registry.py` 注册、toolset 过滤、check_fn、参数类型强转、统一错误与结果截断已有基础实现（含单测）；尚未接入执行循环——沙箱现用自己的 `sandbox/tools.py` 调度（两套工具层并存的收敛待决策）。
 ### 沙箱与运行入口
 
 - **SandboxAgent（ADR-004，2026-09-23 落地）**：`app/sandbox/` 全套模块已实现——
@@ -38,83 +40,72 @@ OpenDomino 复刻「从群聊提问到任务交付」的团队级 Agent 基础�
   - **文件工具 vendor hermes ShellFileOperations（MIT，`_vendor/` + `hermes_adapter.py`）**：原子写（mktemp+mv）、模糊补丁 + V4A 格式、rg→grep 降级搜索、行号分页读；`DockerExecutor` 经 adapter 提供 execute() 契约；已修 exec 单引号击穿（'''转义）与 127 分层误伤；
   - **双任务类型（原文主路径对齐）**：ConsoleAgent 路由判定 `task.type`（investigate=排查给结论，默认 / modify=变更代码），pipeline 分流：investigate 只读路径（不建分支不提交，结论即交付物，verify_result=conclusion）；modify 交付判定为 HEAD 领先 base_ref（兼容模型自行 commit）；
   - **E2E 已验证（scripts/e2e_sandbox.py）**：investigate 与 modify 双用例全绿——modify 真实 push `domino/task-b37c141b` 分支到 GitHub（产物 data/e2e_sandbox_result.json）；修复过程关键点：执行循环须先回填 assistant(tool_calls) 再回填 tool 消息（hermes 同构，否则上游 400）；容器 mkdir 必须先于 workdir exec；exec 错误分层（125/126/127 → ExecError）。
-  - `reporter.py` 四类事件回传 + `channels/registry.py` 寻址；FeishuChannel 经 bot 发消息 API 按 chat_id 寻址回传（无 session_webhook 过期问题，text 被拒时降级 post 富文本）；
-  - `main.py` 已装配：TaskService→TaskExecutor→TaskPipeline→ConsoleAgent.delegate 真实接线（「SandboxAgent 未接入」占位已移除）。
-  - 测试 `tests/test_sandbox.py` 13 个（Fake 全覆盖，不依赖 Docker）；真实 Docker 集成待本地验证。
+  - `reporter.py` 四类事件回传 + `channels/registry.py` 寻址；FeishuChannel 经 bot 发消息 API 按 chat_id 寻址回传（text 被拒时降级 post，2026-09-29 起改发 interactive 卡片）；
+  - `main.py` 已装配全链：TaskService→TaskExecutor→TaskPipeline→ConsoleAgent.delegate/task_op 真实接线；重启恢复 pending 续跑、running 标失败。
+  - 测试 `tests/test_sandbox.py` Fake 全覆盖（不依赖 Docker）；真实 Docker + GitHub PAT 集成经 `scripts/e2e_sandbox.py` 验证通过。
 ### 运行入口
 
 - **运行入口**：`backend/app/main.py` 启动 FastAPI、SQLite 与飞书 WebSocket 长连接；提供 `/health` 和 `/ready`。
 ### 尚未实施
 
-- **尚未实施**：verify.py 独立 AI 验证与回炉（一期以预评审替代）、SKILL loader/目录、Langfuse 埋点、管理后台。
+- **verify.py 独立 AI 验证与 blocked 回炉**（ADR-004 管线步骤 5）：一期以预评审替代（`pipeline.py` finish 终态恒为 review），`sandbox_verify_max_retries` 配置暂无消费方。
+- **ADR-002 Phase B「任务完成提炼」**：任务 done 后触发 KBase 提炼（ADR-002/003 触发点），SandboxAgent 结论沉淀记忆的闭环未接。
+- **ADR-008 入群事件回拉**：`im.chat.member.bot.added_v1` 订阅未实现，bot 新入群需重启才能补拉历史；重启补拉已实现。
+- **SKILL 方法层（ADR-005）**：ADR 定稿、零代码——`app/skills/` 不存在、`load_skill` 未注册、`skills_dir` 为死配置。
+- **Langfuse 链路追踪（ADR-007）**：ADR 定稿、零代码——`app/tracing/` 不存在；依赖已装、`LANGFUSE_*` 配置已备，Task.trace_id 字段在库但恒为空。
+- **FeishuDocsSource（ADR-011）**：飞书云文档接入只留接口，周期同步架构已就绪。
+- **Web 管理后台**：README/handoff 均列为后期建设，ADR 未立项。
 
 ## 验证状态
 
-- 最近测试：`cd backend && python -m pytest tests/ -q`，**63 passed**（含确认流 12 个、装配/并发 9 个新测试）。
-- **真实闭环已验证**：钉钉时代（2026-09-23）曾在真实钉钉群验证 @问答闭环；迁移飞书后（ADR-008，2026-09-28）已在真实飞书群验证 @问答 + 旁听上下文闭环（机器人身份自学习、@ 占位符还原、上下文段落按稳定性重排）。
-- LLM 上游 429 已解除（探测成功）。
-- 服务运行于 `http://127.0.0.1:8000`，Stream 握手成功。
-- `init()` 已加轻量列迁移（`pending_memory_json`、`summary`），旧库自动升级，`create_all` 不会给已有表加列的问题已处理。
+- 单测：`cd backend && python -m pytest tests/ -q`（约 94 passed；console/sandbox/记忆/确认流/Phase A/task_ops/tools/向量召回全覆盖）。
+- **E2E（真实环境）**：飞书通道 44 用例（`scripts/e2e_feishu_channel.py`）、蒸馏 26 用例（`scripts/e2e_distill.py`）、KB 同步（`scripts/e2e_kbsync.py`）、沙箱三模式（`scripts/e2e_sandbox.py`，真实 Docker + GitHub PAT，modify 真实 push 分支）——均有 JSON 报告产物。
+- **黄金测试集**：`eval/cases/` 21 个路由族 case + `scripts/run_golden.py`（真实 LLM，Decision 主断言），最近报告见 `data/golden_report.json`；重跑后注意核对报告里的 git_commit 是否为最新提交。
+- 服务运行于 `http://127.0.0.1:8000`，飞书 WebSocket 握手成功，真实群 @问答 + 旁听上下文闭环已验证（2026-09-28）。
+- `init()` 已加轻量列迁移（`pending_memory_json`、`summary`），旧库自动升级。
 
 ## 已确认的设计决策
 
 完整背景见 `docs/decisions/`：
 
 - ADR-001：仅群聊作为入口（通道原为钉钉，后迁飞书）；不做私聊和 Web 群聊。Web 后期只作为管理后台。**通道选型已被 ADR-008 取代**。
-- ADR-002：L1 群级 Session、L2 团队 KBase、L3 正式知识库分层；团队记忆写入需要确认。**Phase 0 增补（已实现）**：双槽位 pending/pending_memory；确认流 `/沉淀` 建草稿群内确认、`记住:` 直达入库；确认词确定性拦截（@ 门控，不走 LLM）；拒绝/过期物理删除；上下文装配段落模型 + 预算反向填充；压缩设计（Phase A 实施）；并发模型。
+- ADR-002：L1 群级 Session、L2 团队 KBase、L3 正式知识库分层；团队记忆写入需要确认。**Phase 0 / A / C 增补（已实现）**：双槽位 pending/pending_memory；确认流 `/沉淀` 建草稿群内确认、`记住:` 直达入库；确认词确定性拦截（@ 门控，不走 LLM）；拒绝/过期物理删除；上下文装配段落模型 + 预算反向填充；滚动压缩（Phase A）；向量召回三级递进（Phase C）；纠正提炼。**Phase B「任务完成提炼」未实施**；多 worker 并发控制暂缓。
 - ADR-003：ConsoleAgent 单次结构化路由；pending 判定和路由合并；群关联仓库；Task 持久化后异步执行。
 - ADR-008：**飞书为唯一协作入口通道**（lark-oapi WebSocket 长连接），钉钉通道代码与 `DINGTALK_*` 配置已移除、通道数据不迁移；群聊旁听上下文（@ 进管线、非 @ 写旁听缓冲、装配时合并为单一时间线）；历史回拉入群与重启双触发。已实测验证（2026-09-28：机器人身份自学习、@ 占位符还原、上下文段落按稳定性重排）。
 
 ### 执行与观测层决议
 
-- ADR-004：SandboxAgent 使用受控 Agentic 循环；容器按仓库池化，任务工作区独占并重置；强制汇总、反死循环和安全护栏；TaskEvent 给团队看、Langfuse trace 给开发者排查。**详细设计已定稿（2026-09-23，见 `docs/design/sandbox-agent-detail.md`，未实现）**：原生 function calling 循环 + 8k 截断/确定性历史裁剪（LLM 摘要留二期）；TaskService 落库+入队即返回，重启时 pending 续跑、running 标 failed；容器按 repo 池化复用、**容器内 clone**（规避 Windows bind-mount I/O）；fastclaw 三层超时击杀（setsid+pgid+二次 exec kill）；回传走 FeishuChannel bot 发消息 API 按 chat_id 寻址 + TaskEvent 永远落库（ADR-008 迁移后修订，钉钉 session_webhook 5 分钟过期问题已不存在，见设计文档 §4.2）；凭据 HTTPS+PAT+输出脱敏；工具集复用 ToolRegistry 全局单例、容器经 dispatch ctx 注入。
-- ADR-005：SKILL 由模型自主选择加载；系统提示只放技能目录，按需加载全文并预检依赖。
-- ADR-006：工具参考 hermes-agent，普通 Python handler + schema 注册到统一 ToolRegistry；ConsoleAgent 当前无工具循环。
+- ADR-004：SandboxAgent 使用受控 Agentic 循环；容器按仓库池化，任务工作区独占并重置；强制汇总、反死循环和安全护栏；TaskEvent 给团队看、Langfuse trace 给开发者排查。**已实现（2026-09-23 定稿设计，见 `docs/design/sandbox-agent-detail.md`）**：原生 function calling 循环 + 8k 截断/确定性历史裁剪（LLM 摘要留二期）；TaskService 落库+入队即返回，重启时 pending 续跑、running 标 failed；容器按 repo 池化复用、**容器内 clone**（规避 Windows bind-mount I/O）；fastclaw 三层超时击杀（setsid+pgid+二次 exec kill）；回传走 FeishuChannel bot 发消息 API 按 chat_id 寻址 + TaskEvent 永远落库（ADR-008 迁移后修订，见设计文档 §4.2）；凭据 HTTPS+PAT+输出脱敏；**独立 verify.py 评审与回炉留待实施（一期以预评审替代）**。
+- ADR-005：SKILL 由模型自主选择加载；系统提示只放技能目录，按需加载全文并预检依赖。**未实施**。
+- ADR-006：工具参考 hermes-agent，普通 Python handler + schema 注册到统一 ToolRegistry；ConsoleAgent 当前无工具循环。Registry 基础实现与单测已有，**尚未被任何执行链路消费**（沙箱暂用自有工具调度，收敛方案待决策）。
 - ADR-007：采用 Langfuse，trace_id 随 Task 传递并跨异步执行续接；TaskEvent 与 trace 各司其职。
 - ADR-009：旁听结论蒸馏——群聊讨论经确认沉淀为团队记忆（水位线按消息时间戳推进）。
 - ADR-010：任务进展可见与中途管控（task_op）。
 
 ## 下一步开发顺序
 
-按优先级排列，0 是当前最高优先级，其余顺序在 0 完成后可能按联调结果调整。每项都标注了对应 ADR；完成一项就把该项移入「当前实现」并更新验证状态。
+按「闭环完整性」优先排列；完成一项就移入「当前实现」并更新验证状态。第一优先是交付质量与记忆闭环（主链路最后三个断点）：verify.py 独立 AI 验证与回炉、Phase B 任务完成提炼、Langfuse 接入与 trace_id 贯通。
 
-### 0. SandboxAgent 联调验证（当前最高优先级）
+- **verify.py 独立 AI 验证与回炉**（ADR-004 步骤 5）：独立评审 + blocked 时按 `sandbox_verify_max_retries` 回炉重试；
+- **Phase B 任务完成提炼**（ADR-002 触发点 1 / ADR-003 触发点 3）：任务 done 后提炼结论进 KBase 确认流；
+- **Langfuse 接入**（ADR-007）：`app/tracing/` 埋点 + Task.trace_id 贯通（委派时生成、沙箱异步续接）。
 
-代码已全部落地、Fake 测试全绿，但**尚未连真实 Docker**（飞书通道本身已在真实环境验证）：
+### 2. 小而明确的补丁
 
-- 本机启动 Docker Desktop，配 `REPO_{NAME}_URL/_TOKEN/_TEST_CMD` 环境变量，跑一个真实小仓库任务（clone→改代码→测试→push 分支）；
-- 验证任务回传走 FeishuChannel bot 发消息 API 通道；
-- 跑通后可删掉 `SandboxAgent 未接入` 兜底分支（console/agent.py `_do_delegate` 已真实接线，该占位分支自然失效）。
+- **入群事件回拉**（ADR-008 决议 4）：订阅 `im.chat.member.bot.added_v1` 触发 backfill，完成后回填 ADR 实测验收项 2；
+- **解析降级话术**（router.py）：无效 JSON 降级回复补来源标记与安全话术，并补测试。
 
-### 1. Phase A：LLM 提炼 + 滚动摘要
+### 3. 大特性单独立项
 
-LLM 已可用，Phase 0 的状态机和 `summary` 字段已就位，可直接开工：
+- **SKILL 方法层**（ADR-005）：文件发现、frontmatter 校验、渐进式目录、`load_skill`；
+- **FeishuDocsSource**（ADR-011）：飞书云文档 Source 子类；
+- **Web 管理后台**：需先立 ADR（任务/KBase 治理、数据库可见性，ADR-009 亦标注值得单独立项）。
 
-- **纠正提炼**：路由器 `correction_detected=true` 时，把纠正内容建草稿进入确认流（复用 `MemoryConfirmHandler`，汇入同一状态机）。
-- **滚动摘要**：`messages` 超过 `session_compact_trigger`（40）时触发压缩；Stage 1 免费过滤机械回复；Stage 2 用 `console_summary_model`（默认 = console_model）按 ADR-002 模板（当前主题/已解决问答+来源标记/关键决定/用户纠正原话/未决问题）迭代更新 `session.summary`；LLM 失败降级为丢弃 + "[更早 N 条消息已省略]"占位。
-- **路由器 prompt 补澄清归属**：pending 带 `asked_user_id` 后，prompt 中加"旁人插话时倾向 new_question、不消费别人的澄清"指引。
-- 详细设计已定稿于 `docs/decisions/002-memory-layer.md`（Phase 0 增补节）。
+### 4. 质量加固
 
-### 2. 修复 ConsoleAgent 的剩余正确性缺口
-
-- **Session 并发安全**：同群锁仅在单个 ConsoleAgent 进程内有效；第一阶段维持单 worker 约束，未来做数据库级并发控制。
-- **群仓库绑定**：目前只是进程内字典，未持久化，也没有管理入口；委派前还不能依赖它作为可靠 repo 来源。
-- **解析降级行为**：无效 JSON 两次后把模型原始文本直接答给用户，可能缺少来源标记；需要决定安全的降级话术并补测试。
-
-### 3. 实现持久化任务骨架，再做 SandboxAgent
-
-先建立 Task/TaskEvent 数据模型、TaskService、按仓库串行任务队列和失败恢复语义，再接 Docker 容器池。ADR-003 的 ConsoleAgent 目前没有真实 TaskService 注入，因此 delegate 只会返回「SandboxAgent 未接入」或依赖测试 fake。
-
-SandboxAgent 按 ADR-004 实施：仓库维度复用容器、每 Task 独占工作区并重置；任务完成 push 独立分支，不自动合并；工具执行使用硬超时、进程组清理、输出上限和危险命令防护。安全边界应优先于扩大可执行能力。
-
-### 4. 实现 SKILL，再接入 Langfuse
-
-- SKILL：先做文件发现、frontmatter 校验、渐进式目录和 `load_skill`，再添加最小示例技能和测试。
-- Langfuse：部署自托管服务前确认 Docker Compose 配置与资源需求；Python SDK 初始化和采样关闭路径先测试，再在 LLM generation、记忆召回、委派、工具执行等节点埋点。Task 的 trace_id 必须持久化以续接异步沙箱链路。
-
-### 5. 再补完整记忆检索与管理后台
-
-KBase 语义检索、L3 文档导入/版本/FTS5/向量检索，以及 Web 管理后台都在已确认设计中，但目前不应先于真实入口闭环和任务交付骨架。
+- `docs/knowledge.py` + `chunker.py`（L3 核心）补单测回归防线；
+- `channels/feishu.py`、`console/distiller.py`、`sandbox/container.py` 现仅脚本级 E2E（依赖真实凭证），按需抽可离线跑的单测；
+- 黄金测试集扩展：目前仅覆盖路由族，context 记忆/沙箱执行/蒸馏无 case。
 
 ## 启动与测试
 
@@ -128,8 +119,9 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 ## 交接边界与注意事项
 
-- 当前完成的是「飞书入口 + ConsoleAgent 答疑骨架 + 旁听上下文」，不是完整 Domino 交付闭环。
-- 不要把 ADR 文档中已写的模块结构当成已实现代码；SandboxAgent、SKILL、Langfuse、L3 检索仍未实现。
-- 不要宣称真实群聊回复已验证的旧结论：钉钉时代的 429 阻塞已解除，飞书通道闭环已在真实环境验证（见 ADR-008 实测修复记录）。
+- 当前完成的是「飞书入口 + ConsoleAgent 路由 + SandboxAgent 交付 + 三层记忆 + 旁听蒸馏/管控/KB 同步」；未完成清单见「尚未实施」。
+- 不要把 ADR 文档中已写的模块结构当成已实现代码：SKILL、Langfuse、verify.py 独立验证仍无代码。
+- Session 并发安全仅单 worker（同群锁进程内有效，ADR-002 声明多 worker 需数据库级并发控制，暂缓）。
+- KBase 现为全局共享（ADR-009 遗留：按群隔离作用域未做），多群使用后注意串味问题。
 - 不要打印或提交 `.env`、API key、飞书/仓库 secret、webhook 等敏感值。
 - 开发继续遵循 `AGENTS.md`：模块逐个讨论确认，发现需求与原文定位偏差时先指出再实施。

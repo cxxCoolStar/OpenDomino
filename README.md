@@ -24,11 +24,10 @@ SandboxAgent（执行与交付，真实仓库沙箱）
 
 ## 技术栈
 
-- 后端：Python FastAPI + SQLAlchemy + ChromaDB（向量记忆）+ Docker SDK（沙箱）
-- 前端：React + Vite + Ant Design
+- 后端：Python FastAPI + SQLAlchemy（SQLite）+ ChromaDB（向量检索）+ Docker SDK（沙箱）
 - LLM：OpenAI 兼容接口（可配 base_url / api_key / model）
 - 群聊入口：飞书机器人（lark-oapi WebSocket 长连接，见 ADR-008）
-- 管理后台：Web（任务记录 / KBase 治理 / Dashboard / 配置，后期建设，非聊天入口）
+- 管理后台：Web（任务记录 / KBase 治理 / Dashboard / 配置，后期建设，非聊天入口，未开工）
 - Git：真实提交；CodeReview / 部署 / AI 验证：简化闭环
 
 ## 设计原则（来自原文）
@@ -57,4 +56,6 @@ SandboxAgent（执行与交付，真实仓库沙箱）
 
 ## 状态
 
-🚧 项目初始化阶段，开发中。
+核心闭环已通：飞书群 @ 提问 → ConsoleAgent 路由（answer/clarify/delegate/repo_op/task_op）→ SandboxAgent 真实仓库交付（investigate/modify，真实 push 分支）→ 任务回传群聊；三层记忆（L1 Session / L2 KBase 含向量召回 / L3 知识库双路检索）、旁听上下文与蒸馏（ADR-008/009）、任务管控（ADR-010）、知识库自动同步（ADR-011）均已落地。
+
+进行中/未开工：SKILL 方法层（ADR-005 已定稿）、Langfuse 链路追踪（ADR-007 已定稿）、独立 AI 验证与回炉（ADR-004 二期）、Web 管理后台。详见 `docs/handoff.md`。
