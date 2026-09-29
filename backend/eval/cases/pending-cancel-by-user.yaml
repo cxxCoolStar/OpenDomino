@@ -1,0 +1,17 @@
+id: pending-cancel-by-user
+name: 待澄清时用户明确取消 → cancel 消费且不委派
+category: pending
+priority: P0
+fixtures:
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+  pending_clarify:
+    question: "要优化启动速度的具体场景是什么？冷启动还是热重载？"
+turns:
+  - input: "算了，先不弄这个了"
+    expected:
+      action: answer
+      pending_resolution: cancel
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "预置 clarify pending（等效上一轮已澄清提问）。用户明确取消：pending 必须以 cancel 语义消费，且不得产生委派。"

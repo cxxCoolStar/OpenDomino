@@ -1,0 +1,16 @@
+id: route-answer-no-delegate-for-knowledge
+name: 知识库文档问题答疑不委派（L3 命中场景的替代：无仓库绑定）
+category: routing
+priority: P1
+fixtures:
+  memories:
+    - title: 黄金集定位
+      statement: 黄金测试集只测真实 LLM 行为质量，逻辑回归由 Fake 单测负责。
+      memory_type: decision
+turns:
+  - input: "黄金测试集的定位是什么？为什么不用它做逻辑回归？"
+    expected:
+      action: answer
+      reply_must_contain: ["Fake"]
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "有 KBase 命中也不得委派；锚点为 fixture 陈述原文中的「Fake」。"

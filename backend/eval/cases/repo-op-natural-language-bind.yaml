@@ -1,0 +1,14 @@
+id: repo-op-natural-language-bind
+name: 自然语言绑定仓库（LLM 识别意图，非正则格式）
+category: repo_op
+priority: P1
+turns:
+  - input: "我想让你们能处理我们团队的工具库，仓库地址是 https://github.com/myteam/utils.git，把它叫作 utils 绑定到这个群"
+    expected:
+      action: repo_op
+      repo_op:
+        op: bind
+        name: utils
+        url: https://github.com/myteam/utils.git
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "非「绑定仓库 x: url」正则格式，靠 LLM 识别 repo_op 意图；执行是确定性代码。"

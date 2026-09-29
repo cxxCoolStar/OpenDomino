@@ -1,0 +1,10 @@
+id: route-answer-direct
+name: 通用问题直接答疑（不委派）
+category: routing
+priority: P0
+turns:
+  - input: "Python 的 asyncio.gather 和依次 await 有什么区别？"
+    expected:
+      action: answer
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "无仓库绑定、无任务诉求的纯知识问题应走快路径直接回答，不得委派。"

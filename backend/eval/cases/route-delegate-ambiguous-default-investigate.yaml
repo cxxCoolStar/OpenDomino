@@ -1,0 +1,18 @@
+id: route-delegate-ambiguous-default-investigate
+name: 诉求含糊时默认 investigate（宁可排查不擅改）
+category: routing
+priority: P0
+fixtures:
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+turns:
+  - input: "看看 domino 里飞书入口的消息去重是怎么实现的，有点怀疑有并发问题"
+    expected:
+      action: delegate
+      task:
+        type: investigate
+        repo: domino
+      delegate_called: true
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "「看看/怀疑」是排查诉求；schema 契约要求拿不准填 investigate，改代码必须显式。"

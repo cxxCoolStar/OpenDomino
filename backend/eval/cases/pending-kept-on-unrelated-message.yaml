@@ -1,0 +1,17 @@
+id: pending-kept-on-unrelated-message
+name: 待澄清时明确新话题 → new_question 消费且正常答疑
+category: pending
+priority: P0
+fixtures:
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+  pending_clarify:
+    question: "要修的是哪个 bug？"
+turns:
+  - input: "先别管那个了。问个别的：Python 的 GIL 是什么？"
+    expected:
+      action: answer
+      pending_resolution: new_question
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "用户显式放弃原话题转新话题（「先别管那个了」）：路由器判 new_question 消费 pending 并直接答疑，不得把新问题当作对澄清的回答。"

@@ -1,0 +1,10 @@
+id: route-clarify-missing-repo-and-target
+name: 信息严重缺失时澄清而不是瞎猜
+category: routing
+priority: P0
+turns:
+  - input: "帮我改一下那个 bug"
+    expected:
+      action: clarify
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "无绑定仓库、无 bug 上下文，唯一正确行为是澄清。多轮续跑见 route-pending-* 系列。"

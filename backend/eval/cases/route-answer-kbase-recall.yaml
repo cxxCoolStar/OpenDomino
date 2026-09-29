@@ -1,0 +1,17 @@
+id: route-answer-kbase-recall
+name: 团队约定答疑（KBase confirmed 条目注入后直接回答）
+category: routing
+priority: P0
+fixtures:
+  memories:
+    - title: 分支命名规范
+      statement: domino 仓库的任务分支统一用 domino/task-<任务号8位hex> 命名。
+      memory_type: convention
+      keywords: [分支, 命名]
+turns:
+  - input: "我们 domino 仓库的分支命名规范是什么？"
+    expected:
+      action: answer
+      reply_must_contain: ["domino/task-"]
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "confirmed 条目 ≤20 全量注入（recall_kbase 三级召回第 1 级），不需要 embedding。断言锚点来自 fixture 陈述原文。"

@@ -1,0 +1,18 @@
+id: route-delegate-multi-repo-unclear-clarify
+name: 多绑定仓库未点名必须澄清（不猜仓库、不真委派）
+category: routing
+priority: P0
+fixtures:
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+    - name: hermes
+      url: https://github.com/org/hermes-agent.git
+turns:
+  - input: "帮我修一下登录超时的问题"
+    expected:
+      action_in: [clarify, delegate]
+      delegate_called: false
+      reply_must_contain: ["domino", "hermes"]
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "功能契约：不猜仓库、不触发真实委派、回复列出本群可选仓库让用户选。实现路径两种皆可——模型直接 clarify（更早拦截），或模型 delegate 未给 repo 落到 _do_delegate 代码澄清，故 action_in 二选一。"

@@ -1,0 +1,26 @@
+id: context-coreference-resolution
+name: 多轮指代消解（「那个文件」→ 上轮答疑中的文件名进入委派指令）
+category: context
+priority: P1
+fixtures:
+  memories:
+    - title: 容器池化实现位置
+      statement: domino 的容器池化逻辑实现在 backend/app/sandbox/container.py，按 repo 维护容器池。
+      memory_type: decision
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+turns:
+  - input: "domino 的容器池化逻辑在哪个文件里？"
+    expected:
+      action: answer
+      reply_must_contain: ["container.py"]
+  - input: "再仔细看看那个文件里 idle 驱逐是怎么触发的"
+    expected:
+      action: delegate
+      task:
+        type: investigate
+        repo: domino
+      instruction_must_contain: ["container.py"]
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "第二轮「那个文件」的指代物只存在于第一轮答疑里；检验委派 instruction 是否消解指代为自包含指令（TaskSpec 契约：指令自包含，沙箱看不到群聊）。"

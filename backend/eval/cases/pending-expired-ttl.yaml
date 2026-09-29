@@ -1,0 +1,20 @@
+id: pending-expired-ttl
+name: 澄清过期后新消息按全新请求处理
+category: pending
+priority: P0
+fixtures:
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+  pending_clarify:
+    question: "要到哪个仓库执行？"
+    age_minutes: 45
+turns:
+  - input: "帮我排查 domino 里消息去重的实现"
+    expected:
+      action: delegate
+      task:
+        type: investigate
+        repo: domino
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "TTL 30 分钟，45 分钟前的 pending 已过期：过期 pending 必须被清理且新消息正常委派。"

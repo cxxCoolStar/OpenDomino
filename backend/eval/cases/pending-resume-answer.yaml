@@ -1,0 +1,20 @@
+id: pending-resume-answer
+name: 待澄清时补充关键信息 → answered 消费并委派 modify
+category: pending
+priority: P0
+fixtures:
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+  pending_clarify:
+    question: "要改的是哪个仓库的登录超时？改成多少？"
+turns:
+  - input: "是 domino 仓库，登录态 30 分钟就过期了，要改成 2 小时"
+    expected:
+      action: delegate
+      task:
+        type: modify
+        repo: domino
+      pending_resolution: answered
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "预置 clarify pending（等效上一轮已澄清提问）。正面回答澄清问题：pending 以 answered 消费，委派为 modify。"

@@ -1,0 +1,16 @@
+id: context-correction-detected
+name: 用户纠正错误认知 → correction_detected 且直接答疑
+category: context
+priority: P1
+fixtures:
+  memories:
+    - title: 测试策略（旧认知）
+      statement: 本项目所有代码改动都必须先写单元测试再写实现。
+      memory_type: decision
+turns:
+  - input: "不对，我们项目是 E2E 优先的，不写单元测试，你别记错了"
+    expected:
+      action: answer
+      correction_detected: true
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "纠正消息应标记 correction_detected（触发纠正提炼草稿），动作仍是答疑（AGENTS.md 测试策略）。"

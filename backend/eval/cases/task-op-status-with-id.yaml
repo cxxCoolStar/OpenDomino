@@ -1,0 +1,15 @@
+id: task-op-status-with-id
+name: 任务进展查询（#任务号 → status）
+category: task_op
+priority: P0
+fixtures:
+  active_task_ids: ["a1b2c3d4e5f60718"]
+turns:
+  - input: "#a1b2c3d4 那个任务现在怎么样了？"
+    expected:
+      action: task_op
+      task_op:
+        op: status
+        task_id: a1b2c3d4
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "用户习惯写 8 位短号（#a1b2c3d4），路由器须剥 # 提取短号。执行是确定性代码（TaskOpFn 桩）。"

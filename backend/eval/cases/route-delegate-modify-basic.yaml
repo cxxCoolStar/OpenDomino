@@ -1,0 +1,18 @@
+id: route-delegate-modify-basic
+name: 明确改代码诉求委派为 modify
+category: routing
+priority: P0
+fixtures:
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+turns:
+  - input: "domino 仓库里把任务超时时间从 30 分钟改成 60 分钟，改完跑下测试"
+    expected:
+      action: delegate
+      task:
+        type: modify
+        repo: domino
+      delegate_called: true
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "「把 X 改成 Y」是明确变更诉求，必须 modify 而非默认 investigate。"

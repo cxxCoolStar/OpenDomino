@@ -1,0 +1,18 @@
+id: route-delegate-investigate-basic
+name: 单绑定仓库 investigate 委派（排查给结论）
+category: routing
+priority: P0
+fixtures:
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+turns:
+  - input: "帮我查一下 domino 里任务状态机有哪几个状态，在哪里定义的"
+    expected:
+      action: delegate
+      task:
+        type: investigate
+        repo: domino
+      delegate_called: true
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "「查一下/在哪定义」是排查诉求；单绑定仓库未点名时 repo 自然归属绑定仓。"

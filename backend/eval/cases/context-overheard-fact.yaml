@@ -1,0 +1,16 @@
+id: context-overheard-fact
+name: 旁听上下文利用（非 @ 讨论中的事实进入回答）
+category: context
+priority: P1
+fixtures:
+  observed_messages:
+    - text: "跟大家同步下，domino 的预评审环节这周先关闭，AI 验证下个月接入。"
+      user_name: 王五
+      age_minutes: 10
+turns:
+  - input: "现在 domino 的预评审环节是开还是关？"
+    expected:
+      action: answer
+      reply_must_contain: ["关"]
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "答案只存在于旁听缓冲（用户没 @ 过机器人讨论过这事），检验旁听时间线注入。锚点「关」来自旁听原话。"

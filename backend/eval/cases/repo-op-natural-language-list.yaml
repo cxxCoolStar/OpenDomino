@@ -1,0 +1,19 @@
+id: repo-op-natural-language-list
+name: 自然语言查看已绑定仓库
+category: repo_op
+priority: P1
+fixtures:
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+    - name: hermes
+      url: https://github.com/org/hermes-agent.git
+turns:
+  - input: "这个群现在都关联了哪些代码仓库呀？"
+    expected:
+      action: repo_op
+      repo_op:
+        op: list
+      reply_must_contain: ["domino", "hermes"]
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "「关联了哪些仓库」应识别 repo_op.list；回复是确定性渲染，两个仓库名是硬锚点。"

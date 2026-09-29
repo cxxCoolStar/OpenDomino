@@ -1,0 +1,15 @@
+id: task-op-cancel
+name: 中途取消任务
+category: task_op
+priority: P0
+fixtures:
+  active_task_ids: ["a1b2c3d4e5f60718"]
+turns:
+  - input: "把 #a1b2c3d4 那个任务停掉吧"
+    expected:
+      action: task_op
+      task_op:
+        op: cancel
+        task_id: a1b2c3d4
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "「停掉」映射 cancel；不得误判为 steer 或新委派。"

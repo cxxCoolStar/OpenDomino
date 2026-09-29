@@ -1,0 +1,16 @@
+id: task-op-steer-running
+name: 运行中任务中途纠偏（steer + message）
+category: task_op
+priority: P0
+fixtures:
+  active_task_ids: ["a1b2c3d4e5f60718"]
+turns:
+  - input: "给 #a1b2c3d4 带个话：测试别跑全量，只跑 tests/test_sandbox.py"
+    expected:
+      action: task_op
+      task_op:
+        op: steer
+        task_id: a1b2c3d4
+        message: "只跑 tests/test_sandbox.py"
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "steer 必须带纠偏内容；message 锚点为用户原话片段。"

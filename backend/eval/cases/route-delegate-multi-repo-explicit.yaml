@@ -1,0 +1,20 @@
+id: route-delegate-multi-repo-explicit
+name: 多绑定仓库点名委派（repo 名提取）
+category: routing
+priority: P0
+fixtures:
+  repo_bindings:
+    - name: domino
+      url: https://github.com/org/domino.git
+    - name: hermes
+      url: https://github.com/org/hermes-agent.git
+turns:
+  - input: "到 hermes 仓库排查一下 exec 错误码 127 的分层处理对不对"
+    expected:
+      action: delegate
+      task:
+        type: investigate
+        repo: hermes
+      delegate_called: true
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "多绑定时模型必须正确提取点名仓库；repo 名消歧大小写不敏感。"
