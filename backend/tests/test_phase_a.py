@@ -13,6 +13,14 @@ from tests.test_console_agent import make_msg
 from tests.test_memory_confirm import ReplySink
 
 
+
+async def _noop_delegate(draft: dict) -> str:
+    raise AssertionError("测试用例不应触发委派")
+
+
+async def _noop_task_op(chat_id: str, op: str, task_id: str, message: str) -> str:
+    raise AssertionError("测试用例不应触发任务管控")
+
 @pytest.fixture
 def replies():
     return ReplySink()
@@ -32,7 +40,7 @@ def _agent(mem, replies):
     from app.console.llm import OpenAIClient
     from app.console.router import Router
 
-    return ConsoleAgent(mem, Router(OpenAIClient()), replies)
+    return ConsoleAgent(mem, Router(OpenAIClient()), replies, _noop_delegate, _noop_task_op)
 
 
 @pytest.fixture(scope="module", autouse=True)

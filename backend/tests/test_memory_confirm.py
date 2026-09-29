@@ -18,6 +18,14 @@ from app.memory.types import PendingState
 from tests.test_console_agent import FakeLLM, make_msg
 
 
+
+async def _noop_delegate(draft: dict) -> str:
+    raise AssertionError("测试用例不应触发委派")
+
+
+async def _noop_task_op(chat_id: str, op: str, task_id: str, message: str) -> str:
+    raise AssertionError("测试用例不应触发任务管控")
+
 @pytest.fixture
 async def mem(tmp_path):
     from app.memory.service import SQLiteMemoryService
@@ -31,7 +39,7 @@ def _agent(mem, replies):
     """router 用永远 answer 的 fake——确认流测试只关心拦截与否，不关心路由内容。"""
     from app.console.router import Router
 
-    return ConsoleAgent(mem, Router(FakeLLM([])), replies)
+    return ConsoleAgent(mem, Router(FakeLLM([])), replies, _noop_delegate, _noop_task_op)
 
 
 class ReplySink:

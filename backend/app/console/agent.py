@@ -32,8 +32,8 @@ class ConsoleAgent:
         memory: MemoryService,
         router: Router,
         reply: ReplyFn,
-        delegate: DelegateFn | None = None,
-        task_op: TaskOpFn | None = None,
+        delegate: DelegateFn,
+        task_op: TaskOpFn,
     ) -> None:
         self._memory = memory
         self._router = router
@@ -195,8 +195,6 @@ class ConsoleAgent:
         task = decision.task
         if task is None or not task.instruction:
             return "我需要创建任务，但任务信息不完整，能再说清楚要做什么吗？"
-        if self._delegate is None:
-            return "任务执行功能尚未就绪（SandboxAgent 未接入）。"
 
         # 仓库名解析：优先用模型给的 repo 名，在本群绑定的仓库里消歧（大小写不敏感）
         repo_name = (task.repo or "").strip()
@@ -229,8 +227,6 @@ class ConsoleAgent:
         op = decision.task_op
         if op is None or not op.op:
             return "你是想查任务进展，还是要对任务下中途指示？可以说「#任务号 怎么样了」或「查看任务」。"
-        if self._task_op is None:
-            return "任务执行功能尚未就绪（SandboxAgent 未接入）。"
         task_id = (op.task_id or "").strip().lstrip("#")
         return await self._task_op(msg.chat_id, op.op.strip().lower(), task_id, (op.message or "").strip())
 

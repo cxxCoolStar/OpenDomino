@@ -12,6 +12,14 @@ from app.memory.types import ChatMessage, MemoryDraft, PendingState
 from tests.test_console_agent import FakeLLM, make_msg
 
 
+
+async def _noop_delegate(draft: dict) -> str:
+    raise AssertionError("测试用例不应触发委派")
+
+
+async def _noop_task_op(chat_id: str, op: str, task_id: str, message: str) -> str:
+    raise AssertionError("测试用例不应触发任务管控")
+
 @pytest.fixture
 async def mem(tmp_path):
     from app.memory.service import SQLiteMemoryService
@@ -117,7 +125,7 @@ async def test_concurrent_same_chat_serialized_and_queue_hint(mem, tmp_path):
     llm = SlowLLM(['{"action":"answer","answer":"回答一"}'], delay=0.15)
     from app.console.router import Router
 
-    agent = ConsoleAgent(mem, Router(llm), replies)
+    agent = ConsoleAgent(mem, Router(llm), replies, _noop_delegate, _noop_task_op)
 
     m1 = make_msg("问题一")
     m2 = make_msg("问题二", user_id="u2")
@@ -140,7 +148,7 @@ async def test_clarify_pending_carries_asked_user_id(mem):
 
     replies = ReplySink()
     llm = FakeLLM(['{"action":"clarify","clarify_question":"要改哪个仓库？"}'])
-    agent = ConsoleAgent(mem, Router(llm), replies)
+    agent = ConsoleAgent(mem, Router(llm), replies, _noop_delegate, _noop_task_op)
 
     msg = make_msg("帮我改个 bug")
     msg.user_id = "alice"

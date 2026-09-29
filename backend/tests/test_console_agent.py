@@ -48,6 +48,14 @@ def make_msg(text: str, chat_id: str = "c1", user_id: str = "u1") -> UnifiedMess
     return UnifiedMessage(text=text, user_id=user_id, chat_id=chat_id, message_id="m1")
 
 
+async def _noop_delegate(draft: dict) -> str:
+    raise AssertionError("测试用例不应触发委派")
+
+
+async def _noop_task_op(chat_id: str, op: str, task_id: str, message: str) -> str:
+    raise AssertionError("测试用例不应触发任务管控")
+
+
 # ---- _extract_json ----
 
 def test_extract_json_plain():
@@ -68,7 +76,7 @@ async def test_answer_flow(env):
 
     async def reply(c, t, webhook=""):
         replies.append((c, t))
-    agent = ConsoleAgent(mem, Router(llm), reply)
+    agent = ConsoleAgent(mem, Router(llm), reply, _noop_delegate, _noop_task_op)
     await agent.handle(make_msg("发布流程是什么"))
     assert replies and "O2" in replies[0][1]
 
@@ -83,7 +91,7 @@ async def test_clarify_sets_pending(env):
 
     async def reply(c, t, webhook=""):
         replies.append((c, t))
-    agent = ConsoleAgent(mem, Router(llm), reply)
+    agent = ConsoleAgent(mem, Router(llm), reply, _noop_delegate, _noop_task_op)
     await agent.handle(make_msg("帮我改下那个 bug"))
     assert "哪个仓库" in replies[0][1]
 
@@ -105,7 +113,7 @@ async def test_pending_resolutions_clear_pending(env, resolution):
     async def reply(c, t, webhook=""):
         replies.append((c, t))
 
-    await ConsoleAgent(mem, Router(llm), reply).handle(make_msg("收到"))
+    await ConsoleAgent(mem, Router(llm), reply, _noop_delegate, _noop_task_op).handle(make_msg("收到"))
 
     assert (await mem.load_session("c1")).pending is None
 
@@ -124,7 +132,7 @@ async def test_pending_expired_before_router_context(env, monkeypatch):
     async def reply(c, t, webhook=""):
         replies.append((c, t))
 
-    await ConsoleAgent(mem, Router(llm), reply).handle(make_msg("新问题"))
+    await ConsoleAgent(mem, Router(llm), reply, _noop_delegate, _noop_task_op).handle(make_msg("新问题"))
 
     assert "待澄清问题" not in llm.calls[0][1]
     assert (await mem.load_session("c1")).pending is None
@@ -142,7 +150,7 @@ async def test_pending_consumed_on_answer(env):
         replies.append((c, t))
     async def delegate(d):
         return "tid-999"
-    agent = ConsoleAgent(mem, Router(llm), reply, delegate)
+    agent = ConsoleAgent(mem, Router(llm), reply, delegate, _noop_task_op)
     await agent.handle(make_msg("帮我改下那个 bug"))
     await agent.handle(make_msg("shop-frontend 仓库", user_id="u1"))
 
@@ -153,25 +161,13 @@ async def test_pending_consumed_on_answer(env):
 
 
 @pytest.mark.asyncio
-async def test_delegate_without_sandbox_graceful(env):
-    mem, replies, _ = env
-    llm = FakeLLM(['{"action":"delegate","task":{"title":"x","instruction":"do","repo":"r"}}'])
-
-    async def reply(c, t, webhook=""):
-        replies.append((c, t))
-    agent = ConsoleAgent(mem, Router(llm), reply, delegate=None)
-    await agent.handle(make_msg("改代码"))
-    assert any("尚未就绪" in t for _, t in replies)
-
-
-@pytest.mark.asyncio
 async def test_bad_json_degrades_to_answer(env):
     mem, replies, _ = env
     llm = FakeLLM(["这不是JSON", "还是不是JSON"])  # 两次都坏 → 降级原样回复
 
     async def reply(c, t, webhook=""):
         replies.append((c, t))
-    agent = ConsoleAgent(mem, Router(llm), reply)
+    agent = ConsoleAgent(mem, Router(llm), reply, _noop_delegate, _noop_task_op)
     await agent.handle(make_msg("你好"))
     assert replies and replies[0][1]  # 有回复（降级原样）
 
@@ -184,7 +180,7 @@ async def test_group_serialization_lock(env):
 
     async def reply(c, t, webhook=""):
         replies.append((c, t))
-    agent = ConsoleAgent(mem, Router(llm), reply)
+    agent = ConsoleAgent(mem, Router(llm), reply, _noop_delegate, _noop_task_op)
     import asyncio
     await asyncio.gather(agent.handle(make_msg("q1")), agent.handle(make_msg("q2")))
     sess = await mem.load_session("c1")
