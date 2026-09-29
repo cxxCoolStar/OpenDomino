@@ -3,19 +3,25 @@
 链路：TaskService.create → TaskPipeline.run_task → 真实 Docker 容器
 （clone GitHub 仓库 → LLM 执行循环改代码 → pytest 验证 → push domino/task-* 分支）。
 
+ADR-010 场景（TASK_TYPE=control）：不跑容器，在真实管线上验证进展查询
+（TaskOpHandler.status：事件留痕 + 汇总列表）与取消语义（pending 直落 CANCELED），
+事件留痕随任意 TASK_TYPE 一并断言。
+
 前置条件：
 - Docker Desktop 已启动（docker version 可用）；
 - 本地 git 凭据管理器已缓存 GitHub PAT（对目标仓库有 push 权限）；
 - 环境变量 REPO_{NAME}_URL 已配置（token 由本脚本从凭据管理器注入，不落盘）。
 
 产物（AGENTS.md 要求的可验证产物）：
-- data/e2e_sandbox_result.json —— task 终态 + TaskEvent 序列 + 分支名；
+- data/e2e_sandbox_result.json —— task 终态 + TaskEvent 序列 + 分支名
+  （+ control 场景的查询/取消记录）；
 - 远端 domino/task-* 分支（含 e2e 标记文件的 commit）。
 
 用法：
     cd backend
     REPO_E2E_URL=https://github.com/<user>/<repo>.git \
     REPO_E2E_NAME=e2e \
+    [TASK_TYPE=modify|investigate|control] \
     python scripts/e2e_sandbox.py
 """
 from __future__ import annotations
@@ -31,8 +37,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings                      # noqa: E402
+from app.console.task_ops import TaskOpHandler       # noqa: E402
 from app.sandbox.agent import SandboxAgent           # noqa: E402
 from app.sandbox.container import ContainerPool      # noqa: E402
+from app.sandbox.control import TaskControl          # noqa: E402
 from app.sandbox.llm import OpenAIChatClient         # noqa: E402
 from app.sandbox.pipeline import TaskPipeline        # noqa: E402
 from app.sandbox.reporter import TaskReporter        # noqa: E402
@@ -86,10 +94,81 @@ def _token_scopes_ok(repo_url: str, token: str) -> bool:
         return False
 
 
+async def run_control_scenario(tasks: TaskService) -> dict:
+    """ADR-010 控制场景（无容器）：真实 TaskService + TaskOpHandler 验证
+    进展查询与取消语义。产物结构与其他场景一致，写入同一 result JSON。"""
+    control = TaskControl()
+
+    class QuietReporter(TaskReporter):
+        def __init__(self):
+            pass  # 不接 registry，本场景不推群
+
+    # pending 任务：cancel 直落 CANCELED
+    t_pending = await tasks.create({
+        "title": "E2E control pending",
+        "instruction": "（control 场景）", "repo": "e2e", "type": "investigate",
+        "chat_id": "e2e-chat", "session_id": "e2e-session", "created_by": "e2e-script",
+    })
+    handler = TaskOpHandler(tasks, control)
+    cancel_reply = await handler.handle("e2e-chat", "cancel", t_pending, "")
+    t_pending_row = await tasks.get(t_pending)
+    assert t_pending_row.status == TaskStatus.CANCELED, cancel_reply
+
+    # running 任务：制造事件留痕 → status 单查带最近动态；steer 校验下发
+    t_running = await tasks.create({
+        "title": "E2E control running",
+        "instruction": "（control 场景）", "repo": "e2e", "type": "investigate",
+        "chat_id": "e2e-chat", "session_id": "e2e-session", "created_by": "e2e-script",
+    })
+    await tasks.set_status(t_running, TaskStatus.RUNNING)
+    await control.bind(t_running)
+    await tasks.append_event(t_running, "execute", "tool_summary", "run_command pytest tests/")
+    await tasks.append_event(t_running, "execute", "tool_summary", "read_file backend/app/main.py")
+
+    list_reply = await handler.handle("e2e-chat", "status", "", "")
+    one_reply = await handler.handle("e2e-chat", "status", f"#{t_running[:8]}", "")
+    steer_reply = await handler.handle("e2e-chat", "steer", t_running, "只看 auth 模块")
+    steered = await control.drain_steer(t_running)
+
+    assert f"#{t_running[:8]}" in list_reply and "执行中" in list_reply
+    assert "run_command pytest tests/" in one_reply      # 单查带事件动态
+    assert "下一步" in steer_reply and steered == ["只看 auth 模块"]
+
+    print(f"  [control] cancel→CANCELED ok; status 单查带动态 ok; steer 下发 ok")
+    return {
+        "cancel_pending_reply": cancel_reply,
+        "status_list_reply": list_reply,
+        "status_one_reply": one_reply,
+        "steer_reply": steer_reply,
+        "steered": steered,
+    }
+
+
 async def main() -> int:
     t0 = time.time()
+    task_type = os.environ.get("TASK_TYPE", "modify")
     repo_name = os.environ.get("REPO_E2E_NAME", "e2e")
     repo_url = os.environ.get("REPO_E2E_URL", "")
+
+    # 组件装配（与 main.py 相同的管线，但 reporter 用打桩）——control 场景也要
+    tasks = TaskService(db_url="sqlite+aiosqlite:///./data/e2e_sandbox.db")
+    await tasks.init()
+
+    if task_type == "control":
+        # ADR-010 控制场景：不碰 Docker / LLM / 凭据，验证查询与管控语义
+        control_result = await run_control_scenario(tasks)
+        out = Path("data/e2e_sandbox_result.json")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        result = {
+            "scenario": "control",
+            "control": control_result,
+            "duration_seconds": round(time.time() - t0, 1),
+        }
+        out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\n✅ E2E PASS（control 场景）—— 产物: {out.resolve()}")
+        await tasks.close()
+        return 0
+
     if not repo_url:
         print("ERROR: 请设置 REPO_E2E_URL（HTTPS 格式，如 https://github.com/user/repo.git）")
         return 2
@@ -106,10 +185,6 @@ async def main() -> int:
 
     settings.sandbox_timeout_minutes = 15   # E2E 上限收紧
     # sandbox_model 留空时 sandbox/llm.py 自动回退 console_model，无需在此补丁
-
-    # 组件装配（与 main.py 相同的管线，但 reporter 用打桩）
-    tasks = TaskService(db_url="sqlite+aiosqlite:///./data/e2e_sandbox.db")
-    await tasks.init()
 
     events_log: list[tuple[str, str, str]] = []
 
@@ -144,10 +219,9 @@ async def main() -> int:
 
     pool = ContainerPool()
     agent = SandboxAgent(OpenAIChatClient())
-    pipeline = TaskPipeline(tasks, pool, agent, RecordingReporter())
+    pipeline = TaskPipeline(tasks, pool, agent, RecordingReporter(), control=TaskControl())
 
     # 1) 创建任务（TASK_TYPE=investigate 跑排查用例，默认 modify 走完整交付链）
-    task_type = os.environ.get("TASK_TYPE", "modify")
     instruction = INVESTIGATE_INSTRUCTION if task_type == "investigate" else INSTRUCTION
     task_id = await tasks.create({
         "title": f"E2E sandbox {task_type}",
@@ -180,6 +254,10 @@ async def main() -> int:
         "reporter_events": [list(x) for x in events_log],
         "duration_seconds": round(time.time() - t0, 1),
     }
+
+    # ADR-010 断言：执行期事件留痕真实落库（tool_summary 至少 1 条，除非零工具任务）
+    tool_events = [e for e in events if e.kind in ("tool_summary", "tool_error")]
+    assert tool_events, "ADR-010 事件留痕缺失：执行循环未产出任何 tool_summary/tool_error 事件"
 
     out = Path("data/e2e_sandbox_result.json")
     out.parent.mkdir(parents=True, exist_ok=True)
