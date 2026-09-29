@@ -4,8 +4,8 @@ L1 Session 用 SQLAlchemy + SQLite 持久化（含 pending 状态，重启可恢
 L2 KBase 草稿/确认落库；召回三级递进（Phase C）：
   1. 向量召回（EMBEDDING_MODEL 已配置且条目数 > kbase_full_load_threshold）
   2. 关键词召回（未配置 embedding）
-  3. 全量注入（confirmed 条目 ≤ kbase_full_load_threshold，召回环节消失）
-L3 知识库先给空实现，后续接 FTS5/文档导入。
+  3. 全量注入（confirmed 条目数 ≤ kbase_full_load_threshold，召回环节消失）
+L3 知识库经 search_knowledge 委托 KnowledgeBase（FTS5 + 向量双路，见 app/docs/knowledge.py）。
 """
 from __future__ import annotations
 

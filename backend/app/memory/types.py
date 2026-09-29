@@ -1,7 +1,8 @@
 """记忆层类型定义与 MemoryService 抽象（ADR-002）。
 
-三层记忆职责不同、来源分级。ConsoleAgent 依赖本抽象，不依赖具体存储。
-本步实现 L1 Session 存取；L2 KBase、L3 知识库定义接口，先给空实现，后续补。
+三层记忆职责不同、来源分级。ConsoleAgent 依赖本抽象，不依赖具体存储：
+L1 Session 与 L2 KBase 由 SQLiteMemoryService 实现，L3 检索委托 KnowledgeBase
+（app/docs/knowledge.py，FTS5 + 向量双路）。
 """
 from __future__ import annotations
 
