@@ -1,4 +1,8 @@
-"""ConsoleAgent 主管线（ADR-003）：会话恢复→状态检查→确认流拦截→装配→路由→动作→持久化，群级串行锁。"""
+"""ConsoleAgent 主管线（ADR-003）：会话恢复→状态检查→确认流拦截→装配→路由→动作→持久化，群级串行锁。
+
+ADR-010：新增 task_op 动作执行（status 查询 / steer / cancel），经注入的
+TaskOpFn 下发到沙箱管线，本模块只做路由衔接。
+"""
 from __future__ import annotations
 
 import asyncio
@@ -19,6 +23,7 @@ log = logging.getLogger(__name__)
 
 ReplyFn = Callable[[str, str, str], Awaitable[None]]    # (chat_id, text, session_webhook)
 DelegateFn = Callable[[dict], Awaitable[str]]            # task_draft -> task_id
+TaskOpFn = Callable[[str, str, str, str], Awaitable[str]]  # (chat_id, op, task_id, message) -> 回复文案
 
 
 class ConsoleAgent:
@@ -28,11 +33,13 @@ class ConsoleAgent:
         router: Router,
         reply: ReplyFn,
         delegate: DelegateFn | None = None,
+        task_op: TaskOpFn | None = None,
     ) -> None:
         self._memory = memory
         self._router = router
         self._reply = reply
         self._delegate = delegate
+        self._task_op = task_op
         self._assembler = ContextAssembler(memory)
         self._confirm = MemoryConfirmHandler(memory)
         self._locks: dict[str, asyncio.Lock] = {}
@@ -126,6 +133,8 @@ class ConsoleAgent:
             reply_text = await self._do_delegate(session, msg, decision)
         elif decision.action == Action.REPO_OP:
             reply_text = await self._do_repo_op(msg, decision)
+        elif decision.action == Action.TASK_OP:
+            reply_text = await self._do_task_op(msg, decision)
 
         # 纠正提炼（Phase A）：用户纠正 → 自动建草稿进入确认流（复用 Phase 0 状态机）
         if (
@@ -213,7 +222,17 @@ class ConsoleAgent:
         task_id = await self._delegate(draft)
         session.active_task_ids.append(task_id)
         suffix = f"（仓库：{repo.name}）" if repo else ""
-        return f"已受理，任务 #{task_id[:8]}：{draft['title']}{suffix}。完成后我会在群里同步。"
+        return f"已受理，任务 #{task_id[:8]}：{draft['title']}{suffix}。完成后我会在群里同步；随时可以问我「任务进展」。"
+
+    async def _do_task_op(self, msg: UnifiedMessage, decision) -> str:
+        """任务查询与中途管控（ADR-010）：校验后经注入的 TaskOpFn 确定性执行。"""
+        op = decision.task_op
+        if op is None or not op.op:
+            return "你是想查任务进展，还是要对任务下中途指示？可以说「#任务号 怎么样了」或「查看任务」。"
+        if self._task_op is None:
+            return "任务执行功能尚未就绪（SandboxAgent 未接入）。"
+        task_id = (op.task_id or "").strip().lstrip("#")
+        return await self._task_op(msg.chat_id, op.op.strip().lower(), task_id, (op.message or "").strip())
 
     # ---- 仓库管理意图执行（ADR-008 repo_op：LLM 识别，代码确定性执行）----
 

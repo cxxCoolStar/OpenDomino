@@ -55,6 +55,15 @@ class ContextAssembler:
     def __init__(self, memory: MemoryService) -> None:
         self._memory = memory
         self._observed_cache: dict[str, list[ChatMessage]] = {}
+        self._task_status_fn = None   # 可选：async (task_ids) -> str（ADR-010 状态段活化）
+
+    def set_task_status_fn(self, fn) -> None:
+        """注入任务状态查询函数（ADR-010）：async (task_ids: list[str]) -> 段文本。
+
+        由装配侧（main.py）传入 TaskService 查询闭包，装配器保持无 I/O 依赖；
+        查询失败时状态段静默降级为空（与召回段同策略）。
+        """
+        self._task_status_fn = fn
 
     def prime_observed(self, chat_id: str, messages: list[ChatMessage]) -> None:
         """注入本群旁听消息（管线每次 @ 消息处理前由 ConsoleAgent 调用）。
@@ -77,7 +86,7 @@ class ContextAssembler:
         kbase_text = self._kbase_section(kbase)
         summary = self._summary_section(session)
         repo_section = await self._repo_section(session.chat_id)
-        state = self._state_section(session)
+        state = await self._state_section(session)
         chat = self._chat_section(session)   # ⑥ @ 对话不可裁剪（旁听部分在段内已按窗口截断）
 
         # 预算分配：先无条件保留⑥，其余按「可裁剪优先级」分配剩余预算
@@ -109,7 +118,7 @@ class ContextAssembler:
 
     # ---- 会话状态（不可裁剪，决策价值最高）----
 
-    def _state_section(self, session: SessionContext) -> str:
+    async def _state_section(self, session: SessionContext) -> str:
         parts: list[str] = []
 
         if session.pending and session.pending.kind == "clarify":
@@ -129,7 +138,18 @@ class ContextAssembler:
             )
 
         if session.active_task_ids:
-            parts.append(f"[进行中任务] {', '.join(session.active_task_ids)}")
+            # ADR-010 状态段活化：裸 ID → 查库渲染「状态/耗时/最近一步」，
+            # 终态任务标注（不再是永不清理的过期信息）；查询失败降级为裸 ID 列表。
+            rendered = ""
+            if self._task_status_fn is not None:
+                try:
+                    rendered = await self._task_status_fn(session.active_task_ids)
+                except Exception:  # noqa: BLE001 —— 状态查询失败不阻塞装配
+                    rendered = ""
+            if rendered:
+                parts.append(rendered)
+            else:
+                parts.append(f"[进行中任务] {', '.join(session.active_task_ids)}")
 
         return "[会话状态]\n" + "\n".join(parts) if parts else ""
 
