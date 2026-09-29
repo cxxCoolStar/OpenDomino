@@ -1,0 +1,23 @@
+{
+  "script": "e2e_container_init.py",
+  "ran_at": "2026-09-29 14:43:19",
+  "repo": "e2e-init-repo",
+  "all_passed": true,
+  "results": [
+    {
+      "step": "L2 绑定路径 token 解析",
+      "passed": true,
+      "detail": "cfg.token 从 .env GITHUB_TOKEN 兜底注入"
+    },
+    {
+      "step": "真实容器 clone 私有仓库",
+      "passed": true,
+      "detail": "true\n7e2dead docs: 修正文档中协作入口通道描述——钉钉残留统一为飞书（ADR-008 现状对齐）"
+    },
+    {
+      "step": "clone 失败可见性 + 脱敏",
+      "passed": true,
+      "detail": "git 报错可见=True, token 已脱敏=True: clone 失败: Cloning into '/workspace'...\nremote: Repository not found.\nfatal: repository 'https://github.com/cxxCoolStar/__no_such_repo_e2e__.git/' not "
+    }
+  ]
+}

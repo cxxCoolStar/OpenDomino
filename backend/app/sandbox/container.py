@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from app.config import settings
 from app.sandbox.repo_config import RepoExecutionConfig, resolve_repo_config
+from app.sandbox.tools import sanitize
 
 log = logging.getLogger(__name__)
 
@@ -271,10 +272,17 @@ class ContainerPool:
 
         # 基础镜像（python:3.12-slim 等）可能不带 git：缺失则现场安装（幂等，容器复用时跳过）
         await _ensure_git(executor)
-        await executor.exec(
-            f"git clone {_q(cfg.clone_url)} {_WORKDIR} 2>&1",
+        # clone 失败不能静默：exec 对命令非零退出只回不抛，这里用哨兵捕获真实
+        # 失败原因（认证失败/仓库不存在/网络不通），脱敏后抛出——否则群里只看
+        # 得到后续 probe 的 NOT_A_REPO，掩盖根因
+        clone_out = await executor.exec(
+            f"git clone {_q(cfg.clone_url)} {_WORKDIR} 2>&1 || echo CLONE_FAILED",
             timeout=300,
         )
+        if "CLONE_FAILED" in clone_out:
+            raise ContainerError(
+                "clone 失败: " + sanitize(clone_out.replace("CLONE_FAILED", "").strip()[-300:])
+            )
         # 就绪校验：clone 失败绝不静默——工作区必须真的就绪（fastclaw StatusCrashed 模式）。
         # git 此刻必已安装（_ensure_git 保证），rev-parse 失败会以 exit 非0 正常返回
         probe = await executor.exec("git rev-parse --is-inside-work-tree || echo NOT_A_REPO", timeout=60)

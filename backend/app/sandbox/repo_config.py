@@ -118,8 +118,12 @@ async def resolve_repo_config(repo_name: str, chat_id: str = "", memory=None) ->
 
 
 def _env_token_for(name: str) -> str:
-    """token 来源：REPO_{NAME}_TOKEN（按仓覆盖）→ GITHUB_TOKEN（全局，github.com 才适用）。"""
+    """token 来源：REPO_{NAME}_TOKEN（按仓覆盖）→ GITHUB_TOKEN（全局，github.com 才适用）。
+
+    兜底必须走 _global_github_token()：pydantic-settings 只把 .env 读进 Settings
+    对象、不注入 os.environ，只查 os.environ 会漏掉 .env 里的 GITHUB_TOKEN。
+    """
     specific = os.environ.get(f"REPO_{name.upper()}_TOKEN", "")
     if specific:
         return specific
-    return os.environ.get("GITHUB_TOKEN", "")
+    return _global_github_token()
