@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     console_model: str
     sandbox_model: str                      # ADR-004：建议配比 console_model 更强的模型
     sandbox_llm_timeout_seconds: int = 120  # 执行循环单次 LLM 调用硬超时（编码任务输出长，比 console 宽）
+    sandbox_llm_max_tokens: int = 8192      # 末轮交卷/强制汇总是长文（排查清单可数千字），显式设防端点默认值截断
 
     # ---- ADR-008 入口层（飞书）----
     feishu_app_id: str = ""
