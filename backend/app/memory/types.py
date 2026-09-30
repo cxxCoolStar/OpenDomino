@@ -64,12 +64,12 @@ class MemoryStatus(str, Enum):
     ARCHIVED = "archived"
 
 
-# 记忆来源类型（ADR-009）：manual=/沉淀、记住；correction=纠正提炼；overheard=旁听蒸馏；
-# task=任务完成提炼（ADR-002 Phase B）
+# 记忆来源类型（ADR-009）：manual=/沉淀、记住；correction=纠正提炼；overheard=旁听蒸馏。
+# L2 内容契约（2026-09-30）：只存群聊中人的表态沉淀，任务执行结果不提炼入库
+# （原 task 来源随 Phase B 退役删除，见 ADR-002 §任务完成提炼的退役）。
 MEMORY_SOURCE_MANUAL = "manual"
 MEMORY_SOURCE_CORRECTION = "correction"
 MEMORY_SOURCE_OVERHEARD = "overheard"
-MEMORY_SOURCE_TASK = "task"
 
 
 @dataclass
