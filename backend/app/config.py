@@ -94,12 +94,6 @@ class Settings(BaseSettings):
     skills_dir: str = "skills"
     skills_desc_max_chars: int = 140
 
-    # ---- ADR-006 工具层 ----
-    tool_output_max_chars: int = 50000
-    tool_error_max_chars: int = 2048
-    tool_check_ttl_seconds: int = 30
-    tool_check_grace_seconds: int = 60
-
     # ---- ADR-007 链路追踪 ----
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

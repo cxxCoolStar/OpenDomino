@@ -176,6 +176,31 @@ TOOL_CHECK_TTL_SECONDS=30       # check_fn 结果缓存
 TOOL_CHECK_GRACE_SECONDS=60     # check_fn 抗抖动宽限
 ```
 
+## 实现偏差记录（2026-09-30）
+
+**第一阶段实现未走本 ADR 的 Registry 路线**，Registry 骨架代码（`backend/app/tools/`）从未被
+业务代码引用，已整体删除。偏差原因：
+
+1. **工具层集中在 `backend/app/sandbox/tools.py`**：第一阶段 9 个工具（file/sandbox/git 三组）
+   全部服务于 SandboxAgent 单一消费者，schema dict + handler 映射一个文件足够；重活
+   （原子写、模糊补丁、rg→grep 搜索、行号分页读）实际由 vendor 的 hermes
+   `ShellFileOperations` 承担，Registry 只剩转发仪式感。
+2. **Registry 的核心能力无真实消费者**：toolset 白/黑名单过滤（决议 6）在只有 SandboxAgent
+   时退化为全量注入；check_fn 可用性探测（决议 7）的 9 个工具全部常可用；
+   `_generation` 失效机制下游不存在。按 YAGNI 删除，设计的价值随消费者出现而出现。
+
+## 偏差记录：设计保留与引入时机
+
+**本 ADR 决议 1~7 的抽象不受此次删除影响**，包括极简注册协议、原生工具与 MCP 同构、统一
+dispatch 边界、toolset 过滤、check_fn 可用性探测。
+
+1. **引入时机 = 第二个消费者出现**：给 ConsoleAgent 挂只读工具、或真实接入 MCP server 时，
+   按「模块结构」一节重建 Registry 并把 `sandbox/tools.py` 的工具迁入注册制。
+   迁移时顺带获得两项能力：`coerce_args` 按 schema 强转参数（修掉模型传字符串布尔的问题）、
+   每工具独立截断上限（本 ADR 工具清单表中 read_file 100k / run_command 50k 的差异）。
+2. **配置契约一节随删除作废**：4 个 `TOOL_*` 环境变量不再存在（活配置是
+   `SANDBOX_TOOL_OUTPUT_MAX_CHARS`，见 ADR-004 §资源与安全边界）。
+
 ## 非目标（第一阶段）
 
 - **Tool Search 渐进披露**：第一阶段工具十余个，不爆 context，不做 tool_search/describe/call
