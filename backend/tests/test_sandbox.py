@@ -291,6 +291,47 @@ async def test_patch_replace_surfaces_lint_syntax_error(ws_root):
 
 
 @pytest.mark.asyncio
+async def test_read_file_paginates_and_offers_continue(ws_root):
+    # 大文件默认只回 100 行（页大小对齐 sandbox_tool_output_max_chars 字符预算，
+    # 保证续读 hint 不被全局截断吃掉）且带续读 hint；offset 续读能接到上一页末尾
+    lines = [f"line {i}" for i in range(1, 251)]
+    (ws_root / "big.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+
+    page1 = await dispatch_tool("read_file", {"path": "big.txt"}, ctx)
+    assert _err_of(page1) is None
+    assert "1|line 1" in page1 and "100|line 100" in page1
+    assert "101|line 101" not in page1  # 第二页内容未混入
+    assert "offset=101" in page1  # vendor 续读 hint
+
+    page2 = await dispatch_tool("read_file", {"path": "big.txt", "offset": 101}, ctx)
+    assert _err_of(page2) is None
+    assert "101|line 101" in page2 and "200|line 200" in page2
+
+
+@pytest.mark.asyncio
+async def test_read_file_explicit_limit_extends_page(ws_root):
+    # 显式 limit 可放大页（vendor 上限 2000 行），一次读全中等文件
+    lines = [f"row {i}" for i in range(1, 301)]
+    (ws_root / "mid.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await dispatch_tool("read_file", {"path": "mid.txt", "limit": 300}, ctx)
+    assert _err_of(out) is None
+    assert "300|row 300" in out  # 全文读完，无需续读
+    assert "offset=" not in out
+
+
+@pytest.mark.asyncio
+async def test_read_file_offset_beyond_end_names_recovery(ws_root):
+    # offset 越界：vendor 的 ambiguous-silence guard 给出纠错提示而非空串
+    (ws_root / "small.txt").write_text("a\nb\n", encoding="utf-8")
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await dispatch_tool("read_file", {"path": "small.txt", "offset": 99}, ctx)
+    assert _err_of(out) is None
+    assert "beyond the end" in out and "2 lines total" in out
+
+
+@pytest.mark.asyncio
 async def test_patch_replace_missing_string_errors(ws_root):
     ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
     out = await _dispatch_patch_replace(

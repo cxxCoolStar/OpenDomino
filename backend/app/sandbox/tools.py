@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -104,7 +105,8 @@ _SCHEMAS: dict[str, dict] = {
     "read_file": {
         "name": "read_file",
         "description": (
-            "读取仓库内文本文件全文（二进制文件会被拒绝）。超长文件尾部截断。"
+            "读取仓库内文本文件（二进制文件会被拒绝），带行号前缀，默认返回前 100 行。"
+            "文件更长时输出尾部带续读提示，用 offset 从指定行继续读。"
             "已知路径直接读，读取失败会返回错误——错误本身就是有效信息，"
             "不要先 list_dir 确认文件存在；文件刚写入成功后不要重读验证，"
             "写入成功即已落盘。"
@@ -112,7 +114,11 @@ _SCHEMAS: dict[str, dict] = {
         "parameters": {
             "type": "object",
             "required": ["path"],
-            "properties": {"path": {"type": "string", "description": "相对工作区根的文件路径"}},
+            "properties": {
+                "path": {"type": "string", "description": "相对工作区根的文件路径"},
+                "offset": {"type": "integer", "description": "起始行号（1 起，默认 1）"},
+                "limit": {"type": "integer", "description": "本次返回的最大行数（默认 100，最大 2000）"},
+            },
         },
     },
     "grep": {
@@ -258,12 +264,30 @@ async def _h_list_dir(args: dict, ctx: ToolContext) -> str:
     return _wrap(await ctx.executor.list_dir(args.get("path", ".")))
 
 
+# read_file 默认页大小。vendor 默认 2000 行会撞上 sandbox_tool_output_max_chars
+# 的全局截断，页尾续读 hint 被切掉，模型永远看不到翻页提示——按真实代码行宽
+# （48~88 字符/行 + 行号前缀）从 8000 字符预算反推，100 行/页稳留 hint 空间。
+# 显式传 limit 仍可读到 vendor 上限（2000 行）。
+READ_PAGE_LINES = 100
+
+
+# sed 页输出以换行结尾，vendor _add_line_numbers 会把末尾空串编号成孤儿行号行
+# （如页末是第 100 行时多出 "101|"），按行号行模式剥掉
+_ORPHAN_LINE_NO_RE = re.compile(r"\n\d+\|(?=\n|$)")
+
+
 async def _h_read_file(args: dict, ctx: ToolContext) -> str:
     ops = _get_file_ops(ctx)
-    r = await asyncio.to_thread(ops.read_file, args["path"])
+    r = await asyncio.to_thread(ops.read_file, args["path"],
+                                offset=args.get("offset", 1), limit=args.get("limit", READ_PAGE_LINES))
     if r.error:
         return _err(r.error)
-    return _wrap(r.content)
+    out = _ORPHAN_LINE_NO_RE.sub("", r.content)
+    # 续读 hint（截断时）与越界/空文件纠错提示（hint 不带 truncated 标记）都要透传，
+    # 否则模型拿到空串或满页内容却不知道下一步
+    if r.hint:
+        out = f"{out}\n[{r.hint}]" if out else f"[{r.hint}]"
+    return _wrap(out)
 
 
 async def _h_grep(args: dict, ctx: ToolContext) -> str:
