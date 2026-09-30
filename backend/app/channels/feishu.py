@@ -187,7 +187,8 @@ class FeishuChannel(ChannelAdapter):
             sender = (msg.raw.get("event") or {}).get("sender") or {}
         else:
             sender = getattr(getattr(msg.raw, "event", None) or msg.raw, "sender", None) or {}
-        sender_type = str(sender.get("sender_type", "") if isinstance(sender, dict) else getattr(sender, "sender_type", "") or "")
+        raw_type = sender.get("sender_type", "") if isinstance(sender, dict) else getattr(sender, "sender_type", "")
+        sender_type = str(raw_type or "")
         return sender_type == "bot"
 
     def _passthrough_observation(self, msg: ParsedFeishuMessage) -> bool:
@@ -243,7 +244,6 @@ class FeishuChannel(ChannelAdapter):
         if client is None:
             return SendResult(ok=False, error="feishu client not started")
         try:
-            import lark_oapi as lark
             from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 
             body = CreateMessageRequestBody.builder() \
@@ -271,7 +271,6 @@ class FeishuChannel(ChannelAdapter):
     async def _reply_card(self, chat_id: str, text: str) -> SendResult:
         """Markdown 内容发 interactive 卡片（JSON 2.0，单 markdown 组件承载全文）。"""
         try:
-            import lark_oapi as lark
             from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 
             card = _build_markdown_card(text)
@@ -295,7 +294,6 @@ class FeishuChannel(ChannelAdapter):
     async def _reply_post(self, chat_id: str, text: str) -> SendResult:
         """text 被拒时的 post 富文本降级（行级段落，无样式）。"""
         try:
-            import lark_oapi as lark
             from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 
             post = {
@@ -375,7 +373,8 @@ class FeishuChannel(ChannelAdapter):
                     sender_obj = getattr(item, "sender", None)
                     if sender_obj is not None:
                         sender_id_obj = getattr(sender_obj, "id", None)
-                        sender_id = str(getattr(sender_id_obj, "user_id", "") or getattr(sender_id_obj, "open_id", "") or "")
+                        uid = getattr(sender_id_obj, "user_id", "") or getattr(sender_id_obj, "open_id", "")
+                        sender_id = str(uid or "")
                     collected.append(UnifiedMessage(
                         text=body,
                         user_id=sender_id,

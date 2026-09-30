@@ -27,7 +27,7 @@ _tmp_db = Path("./data/e2e_feishu_tmp.db")
 if _tmp_db.exists():
     _tmp_db.unlink()
 
-os.environ["MEMORY_DB_URL"] = f"sqlite+aiosqlite:///./data/e2e_feishu_tmp.db"
+os.environ["MEMORY_DB_URL"] = "sqlite+aiosqlite:///./data/e2e_feishu_tmp.db"
 os.environ.setdefault("LLM_BASE_URL", "http://localhost:9")  # 不触发真实 LLM
 os.environ.setdefault("LLM_API_KEY", "e2e-dummy")
 os.environ.setdefault("CONSOLE_MODEL", "e2e-dummy")
@@ -36,7 +36,7 @@ os.environ.setdefault("FEISHU_APP_ID", "cli_e2e")
 os.environ.setdefault("FEISHU_APP_SECRET", "e2e-secret")
 
 from app.channels.base import UnifiedMessage  # noqa: E402
-from app.channels.feishu import FeishuChannel, MessageDeduplicator  # noqa: E402
+from app.channels.feishu import FeishuChannel  # noqa: E402
 from app.channels.feishu_parse import parse_message  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.console.context import ContextAssembler  # noqa: E402

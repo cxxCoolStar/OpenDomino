@@ -13,7 +13,6 @@ from tests.test_console_agent import make_msg
 from tests.test_memory_confirm import ReplySink
 
 
-
 async def _noop_delegate(draft: dict) -> str:
     raise AssertionError("测试用例不应触发委派")
 
@@ -152,7 +151,7 @@ async def test_compaction_filters_mechanical_replies(mem, replies, monkeypatch):
     monkeypatch.setattr(settings, "console_context_window", 2)
     monkeypatch.setattr(settings, "session_compact_trigger", 1)
 
-    from app.console.compaction import _format_for_summary, is_mechanical, maybe_compact
+    from app.console.compaction import maybe_compact
 
     class CountLLM:
         prompts: list[str] = []

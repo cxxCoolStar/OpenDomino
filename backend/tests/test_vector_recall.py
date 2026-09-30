@@ -9,7 +9,7 @@ import pytest
 from app.config import settings
 from app.memory.embedding import ArkEmbeddingClient, NullEmbeddingClient
 from app.memory.service import SQLiteMemoryService
-from app.memory.types import MemoryDraft, MemoryStatus
+from app.memory.types import MemoryDraft
 
 pytestmark = pytest.mark.skipif(
     not settings.embedding_model, reason="EMBEDDING_MODEL not configured"

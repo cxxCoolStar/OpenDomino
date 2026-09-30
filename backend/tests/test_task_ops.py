@@ -58,6 +58,7 @@ async def test_status_single_task_with_events_and_stale(tmp_path, monkeypatch):
         await svc.append_event(tid, TaskStage.EXECUTE, "tool_summary", "run_command pytest")
         # 伪造停滞：updated_at 拨回 20 分钟前
         from sqlalchemy import update
+
         from app.sandbox.storage import TaskRow
         async with svc._session() as s:
             await s.execute(update(TaskRow).where(TaskRow.id == tid).values(updated_at=time.time() - 1200))

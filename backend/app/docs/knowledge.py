@@ -8,12 +8,10 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
-import math
 import time
-import uuid
 from pathlib import Path
+
 from sqlalchemy import Float, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -351,4 +349,5 @@ def _shared_embedding_client() -> EmbeddingClient:
 
 import asyncio  # noqa: E402
 import re  # noqa: E402
+
 from sqlalchemy import text as sa_text  # noqa: E402

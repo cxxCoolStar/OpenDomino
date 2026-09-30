@@ -22,14 +22,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import settings              # noqa: E402
-from app.memory.service import SQLiteMemoryService   # noqa: E402
-from app.sandbox.container import (          # noqa: E402
+from app.config import settings  # noqa: E402
+from app.memory.service import SQLiteMemoryService  # noqa: E402
+from app.sandbox.container import (  # noqa: E402
     ContainerError,
     ContainerPool,
 )
-from app.sandbox.repo_config import (        # noqa: E402
-    _env_token_for,
+from app.sandbox.repo_config import (  # noqa: E402
     resolve_repo_config,
 )
 

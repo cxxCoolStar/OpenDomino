@@ -26,10 +26,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.sandbox.agent import SandboxAgent            # noqa: E402
-from app.sandbox.llm import LLMResult                 # noqa: E402
-from app.sandbox.pipeline import TaskPipeline         # noqa: E402
-from app.sandbox.types import Task, TaskStatus        # noqa: E402
+from app.sandbox.agent import SandboxAgent  # noqa: E402
+from app.sandbox.llm import LLMResult  # noqa: E402
+from app.sandbox.pipeline import TaskPipeline  # noqa: E402
+from app.sandbox.types import Task, TaskStatus  # noqa: E402
 
 
 class _FakeTasks:

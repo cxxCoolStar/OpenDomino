@@ -5,12 +5,10 @@ import asyncio
 
 import pytest
 
-from app.channels.base import UnifiedMessage
 from app.config import settings
 from app.console.context import ContextAssembler
 from app.memory.types import ChatMessage, MemoryDraft, PendingState
 from tests.test_console_agent import FakeLLM, make_msg
-
 
 
 async def _noop_delegate(draft: dict) -> str:

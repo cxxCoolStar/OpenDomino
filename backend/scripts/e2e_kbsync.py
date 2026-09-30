@@ -41,9 +41,9 @@ os.environ.setdefault("SANDBOX_MODEL", "e2e-dummy")
 os.environ.setdefault("FEISHU_APP_ID", "cli_e2e")
 os.environ.setdefault("FEISHU_APP_SECRET", "e2e-secret")
 
-from app.docs.knowledge import KnowledgeBase          # noqa: E402
+from app.docs.knowledge import KnowledgeBase  # noqa: E402
 from app.docs.syncer import KBSyncer, LocalDocsSource, SyncSource  # noqa: E402
-from app.memory.service import SQLiteMemoryService    # noqa: E402
+from app.memory.service import SQLiteMemoryService  # noqa: E402
 
 PASS: list[dict] = []
 FAIL: list[dict] = []

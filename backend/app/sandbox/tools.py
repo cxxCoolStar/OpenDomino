@@ -159,7 +159,10 @@ _SCHEMAS: dict[str, dict] = {
             "properties": {
                 "path": {"type": "string", "description": "相对工作区根的文件路径"},
                 "old_string": {"type": "string", "description": "要被替换的原文，须在文件中唯一"},
-                "new_string": {"type": "string", "description": "替换后的文本，与 old_string 相同没有意义；传空串即删除匹配文本"},
+                "new_string": {
+                    "type": "string",
+                    "description": "替换后的文本，与 old_string 相同没有意义；传空串即删除匹配文本",
+                },
                 "replace_all": {"type": "boolean", "description": "为 true 时替换全部出现（默认只替换唯一一处）"},
             },
         },
@@ -231,8 +234,8 @@ MUTATING_TOOLS = frozenset({"write_file", "patch_replace", "apply_patch"})
 # hermes ShellFileOperations（vendor，见 _vendor/ + hermes_adapter.py）：
 # 原子写、模糊补丁、rg→grep 降级搜索、行号分页读，全部是她修过几百个 issue 的实现。
 
-from app.sandbox.hermes_adapter import HermesEnvAdapter  # noqa: E402
 from app.sandbox._vendor import file_operations as _hfo  # noqa: E402
+from app.sandbox.hermes_adapter import HermesEnvAdapter  # noqa: E402
 
 _ops_cache: dict[int, Any] = {}
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 import time
 
-from app.config import settings
 from app.sandbox import git_ops
 from app.sandbox.agent import SandboxAgent
 from app.sandbox.container import ContainerPool

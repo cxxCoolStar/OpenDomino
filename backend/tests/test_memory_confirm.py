@@ -5,7 +5,6 @@ import time
 
 import pytest
 
-from app.channels.base import UnifiedMessage
 from app.config import settings
 from app.console.agent import ConsoleAgent
 from app.console.memory_confirm import (
@@ -16,7 +15,6 @@ from app.console.memory_confirm import (
 )
 from app.memory.types import PendingState
 from tests.test_console_agent import FakeLLM, make_msg
-
 
 
 async def _noop_delegate(draft: dict) -> str:

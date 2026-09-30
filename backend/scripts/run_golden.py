@@ -30,15 +30,17 @@ import yaml
 BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND))
 
-from app.channels.base import UnifiedMessage            # noqa: E402
-from app.config import settings                          # noqa: E402
-from app.console.agent import ConsoleAgent               # noqa: E402
-from app.console.llm import OpenAIClient                 # noqa: E402
-from app.console.router import Router                    # noqa: E402
-from app.console.router_types import Decision            # noqa: E402
-from app.memory.service import SQLiteMemoryService       # noqa: E402
-from app.memory.types import (                           # noqa: E402
-    ChatMessage, MemoryDraft, PendingState,
+from app.channels.base import UnifiedMessage  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.console.agent import ConsoleAgent  # noqa: E402
+from app.console.llm import OpenAIClient  # noqa: E402
+from app.console.router import Router  # noqa: E402
+from app.console.router_types import Decision  # noqa: E402
+from app.memory.service import SQLiteMemoryService  # noqa: E402
+from app.memory.types import (  # noqa: E402
+    ChatMessage,
+    MemoryDraft,
+    PendingState,
 )
 
 CASES_DIR = BACKEND / "eval" / "cases"

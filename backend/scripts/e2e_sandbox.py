@@ -36,16 +36,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import settings                      # noqa: E402
-from app.console.task_ops import TaskOpHandler       # noqa: E402
-from app.sandbox.agent import SandboxAgent           # noqa: E402
-from app.sandbox.container import ContainerPool      # noqa: E402
-from app.sandbox.control import TaskControl          # noqa: E402
-from app.sandbox.llm import OpenAIChatClient         # noqa: E402
-from app.sandbox.pipeline import TaskPipeline        # noqa: E402
-from app.sandbox.reporter import TaskReporter        # noqa: E402
-from app.sandbox.storage import TaskService          # noqa: E402
-from app.sandbox.types import TaskStatus             # noqa: E402
+from app.config import settings  # noqa: E402
+from app.console.task_ops import TaskOpHandler  # noqa: E402
+from app.sandbox.agent import SandboxAgent  # noqa: E402
+from app.sandbox.container import ContainerPool  # noqa: E402
+from app.sandbox.control import TaskControl  # noqa: E402
+from app.sandbox.llm import OpenAIChatClient  # noqa: E402
+from app.sandbox.pipeline import TaskPipeline  # noqa: E402
+from app.sandbox.reporter import TaskReporter  # noqa: E402
+from app.sandbox.storage import TaskService  # noqa: E402
+from app.sandbox.types import TaskStatus  # noqa: E402
 
 # 任务指令：最小可验证改动——新增 marker 文件，不触碰业务代码
 INSTRUCTION = (
@@ -134,7 +134,7 @@ async def run_control_scenario(tasks: TaskService) -> dict:
     assert "run_command pytest tests/" in one_reply      # 单查带事件动态
     assert "下一步" in steer_reply and steered == ["只看 auth 模块"]
 
-    print(f"  [control] cancel→CANCELED ok; status 单查带动态 ok; steer 下发 ok")
+    print("  [control] cancel→CANCELED ok; status 单查带动态 ok; steer 下发 ok")
     return {
         "cancel_pending_reply": cancel_reply,
         "status_list_reply": list_reply,

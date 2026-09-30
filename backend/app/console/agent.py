@@ -19,6 +19,7 @@ from app.console.router import Router
 from app.console.router_types import Action, PendingResolution
 from app.memory.service import SQLiteMemoryService
 from app.memory.types import ChatMessage, MemoryService, PendingState
+
 log = logging.getLogger(__name__)
 
 ReplyFn = Callable[[str, str, str], Awaitable[None]]    # (chat_id, text, session_webhook)
@@ -220,7 +221,8 @@ class ConsoleAgent:
         task_id = await self._delegate(draft)
         session.active_task_ids.append(task_id)
         suffix = f"（仓库：{repo.name}）" if repo else ""
-        return f"已受理，任务 #{task_id[:8]}：{draft['title']}{suffix}。完成后我会在群里同步；随时可以问我「任务进展」。"
+        tail = "。完成后我会在群里同步；随时可以问我「任务进展」。"
+        return f"已受理，任务 #{task_id[:8]}：{draft['title']}{suffix}{tail}"
 
     async def _do_task_op(self, msg: UnifiedMessage, decision) -> str:
         """任务查询与中途管控（ADR-010）：校验后经注入的 TaskOpFn 确定性执行。"""

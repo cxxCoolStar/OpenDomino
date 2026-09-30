@@ -1,0 +1,24 @@
+[project]
+name = "opendomino-backend"
+version = "0.1.0"
+description = "OpenDomino 协作入口层与沙箱执行后端"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 120                      # 存量代码按 100~120 宽度书写，88 会产生大量无意义 diff
+target-version = "py312"
+extend-exclude = ["data", "logs"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes（未定义名/未用变量/重复导入——本次 F821/F811/F841 清偿的规则族）
+    "I",   # isort：导入排序（与 E402 配合约束导入块）
+]
+
+[tool.ruff.lint.per-file-ignores]
+# hermes ShellFileOperations 原样 vendor：不追求 lint 干净，避免补丁漂移（对齐上游 diff）
+"app/sandbox/_vendor/*" = ["E", "W", "F", "I"]
+# E2E 脚本是一次性验证工具（AGENTS.md 测试策略：E2E 产出可复核工件），行宽不强制
+"scripts/e2e_*.py" = ["E501"]

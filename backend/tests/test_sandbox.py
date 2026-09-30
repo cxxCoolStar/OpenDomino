@@ -20,7 +20,6 @@ from app.sandbox.storage import TaskService
 from app.sandbox.tools import ToolContext, build_tool_definitions, dispatch_tool
 from app.sandbox.types import Task, TaskStage, TaskStatus
 
-
 # ---------- fakes ----------
 
 
@@ -444,7 +443,7 @@ async def test_agent_budget_exhausted_force_summary(monkeypatch):
 @pytest.mark.asyncio
 async def test_agent_budget_notice_injected_once_per_level(monkeypatch):
     """预算中途提醒：过半/80% 各注入一次 user 消息并落事件，模型收敛后自然完成。"""
-    from app.sandbox.prompts import BUDGET_HALF_NOTICE, BUDGET_HIGH_NOTICE
+    from app.sandbox.prompts import BUDGET_HALF_NOTICE
 
     monkeypatch.setattr(agent_mod.settings, "sandbox_max_steps", 4)
 
