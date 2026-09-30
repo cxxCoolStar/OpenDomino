@@ -8,6 +8,8 @@
 - 所有记忆操作必须 @ 机器人：普通群里 require_mention 已保证；免 @ 群里靠
   is_at_bot 区分「对机器人说确认」和「成员闲聊说确认」，防止误写；
 - 钉钉 @ 消息的 text 可能带「@机器人名 」前缀，匹配前必须归一化剥离；
+  确认/取消精确匹配还剥离句中所有 @token（「取消@Domino」句尾 @ 粘连；
+  2026-09-30 事故：失配落路由器后被 LLM 代答「已取消」，草稿实际未删）；
 - 确认词在 clarify 槽占用时不拦截：此时「确认/取消」大概率在回应澄清问题，
   交给路由器判定（T5 例外）；
 - 拒绝/过期物理删除草稿：不留下半条记忆（ADR-002 写入治理）。
@@ -40,6 +42,7 @@ def cancel_keywords() -> list[str]:
 
 
 _AT_PREFIX_RE = re.compile(r"^(?:@\S+\s*)+")
+_AT_TOKEN_RE = re.compile(r"@\S+")
 
 
 def normalize_text(text: str) -> str:
@@ -48,6 +51,17 @@ def normalize_text(text: str) -> str:
     群聊 @机器人 时 text.content 常带「@机器人名 」前缀，不剥离则精确匹配永远失配。
     """
     return _AT_PREFIX_RE.sub("", (text or "").strip()).strip()
+
+
+def normalize_for_match(text: str) -> str:
+    """确认/取消精确匹配专用归一化：剥离消息中所有 @mention token。
+
+    群友习惯把 @ 放句尾（「取消@Domino」），@ 与关键词粘连会让精确匹配失配，
+    消息落到 LLM 路由器后被代答「已取消」而草稿不动（2026-09-30 事故根因 1）。
+    @token 在确认/取消这类短语里只可能是点名机器人，剥离不改变语义；
+    「记住：」「/沉淀」前缀识别仍用 normalize_text，避免误删正文中的 @。
+    """
+    return normalize_text(_AT_TOKEN_RE.sub(" ", (text or "")))
 
 
 def normalize_remember(text: str) -> str | None:
@@ -70,8 +84,8 @@ def normalize_deposit(text: str) -> str | None:
     return None
 
 
-def _is_exact(text: str, keywords: list[str]) -> bool:
-    return normalize_text(text) in keywords
+def _is_exact(text: str, keywords: list[str], *, match=normalize_text) -> bool:
+    return match(text) in keywords
 
 
 def _free_response_chats() -> set[str]:
@@ -124,7 +138,7 @@ class MemoryConfirmHandler:
             return False
 
         memory_id = session.pending_memory.payload.get("memory_id", "")
-        if _is_exact(msg.text, confirm_keywords()):
+        if _is_exact(msg.text, confirm_keywords(), match=normalize_for_match):
             hit = await self._memory.get_memory(memory_id)
             if hit is None:
                 session.pending_memory = None
@@ -136,7 +150,7 @@ class MemoryConfirmHandler:
             log.info("memory confirmed: chat=%s memory=%s by=%s", msg.chat_id, memory_id, msg.user_id)
             await reply(msg.chat_id, f"已保存团队记忆：「{hit.title}」。", msg.session_webhook)
             return True
-        if _is_exact(msg.text, cancel_keywords()):
+        if _is_exact(msg.text, cancel_keywords(), match=normalize_for_match):
             await self._memory.delete_memory(memory_id)
             # 三态语义：取消也推进——人已明确拒绝，下个周期不再重提（ADR-009）
             await self._advance_watermark(session)

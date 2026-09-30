@@ -224,6 +224,38 @@ async def test_three_states(memory: SQLiteMemoryService) -> None:
           consumed and state.watermark_ts >= wm2 and hit2 is None,
           f"consumed={consumed} wm={state.watermark_ts} hit2={hit2}")
 
+    # 4b 回归锁（2026-09-30 事故）：句尾 @ 粘连导致精确匹配失配——
+    # 「取消@Domino」落到路由器被 LLM 代答「已取消」，草稿实际未删、水位线未动。
+    # 修复后确认/取消匹配剥离句中所有 @token。
+    wm_suffix = time.time() + 70
+    mid_suffix = await setup_proposal("oc_tri", wm_suffix)
+    session = await memory.load_session("oc_tri")
+    consumed = await handler.try_handle(msg("取消@Domino"), session, _noop_reply)
+    state = await memory.get_distill_state("oc_tri")
+    hit_suffix = await memory.get_memory(mid_suffix)
+    check("4b2. 取消：句尾@粘连（取消@Domino）同样命中并推进水位线",
+          consumed and state.watermark_ts >= wm_suffix and hit_suffix is None,
+          f"consumed={consumed} wm={state.watermark_ts} hit={hit_suffix}")
+
+    wm_mid = time.time() + 80
+    mid_mid = await setup_proposal("oc_tri", wm_mid)
+    session = await memory.load_session("oc_tri")
+    consumed = await handler.try_handle(msg("确认@Domino"), session, _noop_reply)
+    hit_mid = await memory.get_memory(mid_mid)
+    check("4b3. 确认：句尾@粘连（确认@Domino）同样命中入库",
+          consumed and hit_mid is not None and hit_mid.status.value == "confirmed",
+          f"consumed={consumed} hit={hit_mid}")
+
+    # 非纯确认词（@ 剥离后仍不是关键词）不消费：防误伤正常讨论
+    mid_keep = await setup_proposal("oc_tri", time.time() + 90)
+    session = await memory.load_session("oc_tri")
+    consumed = await handler.try_handle(msg("我确认一下细节@Domino"), session, _noop_reply)
+    hit_keep = await memory.get_memory(mid_keep)
+    check("4b4. 边界：@剥离后非精确关键词不消费（放行路由器）",
+          (not consumed) and hit_keep is not None,
+          f"consumed={consumed} hit={hit_keep}")
+    await memory.delete_memory(mid_keep)
+
     # 过期：人工提议（无 watermark_ts）过期时水位线必然不动；草稿惰性删除
     mid3 = await setup_proposal("oc_tri", time.time() + 999)
     session = await memory.load_session("oc_tri")
