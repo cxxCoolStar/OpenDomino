@@ -1,15 +1,15 @@
 """Phase A 测试：纠正提炼 + 滚动压缩（ADR-002）。
 
-使用真实 LLM（OpenAIClient）做集成验证；仅 LLM 失败降级路径用注入的失败桩
-（429 无法随叫随到）。真实调用使本文件同时充当 prompt 的回归测试。
+全部用 FakeLLM 脚本化路由/摘要输出，CI 可重复验证（不真连 LLM——
+真 LLM 的 prompt 回归价值在 eval/cases/ 评测集承担，不进门禁）。
+仅压缩降级路径用注入的失败桩（429 无法随叫随到）。
 """
 from __future__ import annotations
 
 import pytest
 
-from app.config import settings
 from app.memory.types import ChatMessage
-from tests.test_console_agent import make_msg
+from tests.test_console_agent import FakeLLM, make_msg
 from tests.test_memory_confirm import ReplySink
 
 
@@ -34,28 +34,29 @@ async def mem(tmp_path):
     return m
 
 
-def _agent(mem, replies):
+def _agent(mem, replies, llm_outputs: list[str]):
+    """FakeLLM 驱动的 ConsoleAgent：outputs 按 LLM 调用顺序出队。
+
+    路由决策是 Router 的 JSON 合同（见 router_types Decision.json_schema_hint）：
+    correction_detected=true 且 action=answer 时，agent 把 answer 里的
+    「待确认」句提炼成草稿挂 pending_memory（_draft_correction）。
+    """
     from app.console.agent import ConsoleAgent
-    from app.console.llm import OpenAIClient
     from app.console.router import Router
 
-    return ConsoleAgent(mem, Router(OpenAIClient()), replies, _noop_delegate, _noop_task_op)
+    return ConsoleAgent(mem, Router(FakeLLM(llm_outputs)), replies, _noop_delegate, _noop_task_op)
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _require_llm():
-    """无 LLM 凭证时跳过整个模块（真实调用前提）。"""
-    if not settings.llm_api_key:
-        pytest.skip("LLM_API_KEY not configured")
-
-
-# ---- 纠正提炼（真实 LLM 路由）----
+# ---- 纠正提炼（FakeLLM 路由脚本）----
 
 
 @pytest.mark.asyncio
 async def test_correction_creates_draft_and_pending(mem, replies):
-    """用户纠正 → 模型应标 correction_detected → 自动建草稿挂确认。"""
-    agent = _agent(mem, replies)
+    """纠正（correction_detected）→ 自动建草稿挂确认，回复带待确认事实。"""
+    agent = _agent(mem, replies, [
+        '{"action":"answer","answer":"已记下（待确认）：发布流程改为必须先在 O2 平台走审批。",'
+        '"correction_detected":true}',
+    ])
     await agent.handle(make_msg("不对，我们团队的发布流程改了：必须先在 O2 平台走审批，然后才允许构建"))
 
     sess = await mem.load_session("c1")
@@ -67,25 +68,33 @@ async def test_correction_creates_draft_and_pending(mem, replies):
 
 @pytest.mark.asyncio
 async def test_correction_confirm_flow_completes(mem, replies):
-    """纠正 → 确认 → 条目 confirmed 可召回（真实 LLM 全链路）。"""
-    agent = _agent(mem, replies)
+    """纠正 → 确认 → 条目 confirmed 可召回（全链路，FakeLLM 路由 + 真状态机）。"""
+    agent = _agent(mem, replies, [
+        '{"action":"answer","answer":"（待确认）：commit message 必须用 Conventional Commits 格式",'
+        '"correction_detected":true}',
+    ])
     await agent.handle(make_msg("你记错了，我们团队 commit message 必须用 Conventional Commits 格式"))
     sess = await mem.load_session("c1")
-    if sess.pending_memory is None:
-        pytest.skip("模型未将本次输入判定为纠正（LLM 判断波动），非代码问题")
+    assert sess.pending_memory is not None, "correction_detected=true 应建草稿"
+    memory_id = sess.pending_memory.payload["memory_id"]
+
     await agent.handle(make_msg("确认"))
 
     hits = await mem.recall_kbase("Conventional Commits")
+    assert any(h.id == memory_id for h in hits), "确认后条目应可召回"
     assert any("Conventional Commits" in h.statement for h in hits)
 
 
 @pytest.mark.asyncio
 async def test_correction_cancel_deletes_draft(mem, replies):
-    agent = _agent(mem, replies)
+    """纠正 → 取消 → 草稿物理删除（人工来源取消=撤回，非 overheard 留档路径）。"""
+    agent = _agent(mem, replies, [
+        '{"action":"answer","answer":"（待确认）：代码合并前必须通过安全扫描",'
+        '"correction_detected":true}',
+    ])
     await agent.handle(make_msg("不对，代码合并前其实还必须通过安全扫描"))
     sess = await mem.load_session("c1")
-    if sess.pending_memory is None:
-        pytest.skip("模型未判定为纠正")
+    assert sess.pending_memory is not None
     memory_id = sess.pending_memory.payload["memory_id"]
 
     await agent.handle(make_msg("取消"))
@@ -95,8 +104,10 @@ async def test_correction_cancel_deletes_draft(mem, replies):
 
 @pytest.mark.asyncio
 async def test_no_correction_no_draft(mem, replies):
-    """普通陈述不应触发纠正提炼（真实 LLM 的误判率观察）。"""
-    agent = _agent(mem, replies)
+    """correction_detected=false 的普通陈述不建草稿。"""
+    agent = _agent(mem, replies, [
+        '{"action":"answer","answer":"收到，已记录在会话里。","correction_detected":false}',
+    ])
     await agent.handle(make_msg("今天下午三点开迭代评审会"))
     sess = await mem.load_session("c1")
     assert sess.pending_memory is None, "非纠正消息不应建草稿"
@@ -105,7 +116,11 @@ async def test_no_correction_no_draft(mem, replies):
 @pytest.mark.asyncio
 async def test_correction_skipped_when_pending_memory_exists(mem, replies):
     """已有待确认条目时（/沉淀 挂起中），纠正回复正常给出但不新建草稿。"""
-    agent = _agent(mem, replies)
+    agent = _agent(mem, replies, [
+        # /沉淀 走的是 answer 之外的手动提炼路径吗？——不是：/沉淀 在 memory_confirm
+        # 拦截器创建草稿，不消耗 LLM 调用；此后纠正消息才走 Router（第 1 个 output）
+        '{"action":"answer","answer":"（待确认）：发布必须走 O2 审批","correction_detected":true}',
+    ])
     await agent.handle(make_msg("/沉淀 第一条约定：测试环境禁止直连生产库"))
     first = (await mem.load_session("c1")).pending_memory.payload["memory_id"]
 
@@ -114,7 +129,7 @@ async def test_correction_skipped_when_pending_memory_exists(mem, replies):
     assert sess.pending_memory.payload["memory_id"] == first  # 仍指向第一条草稿
 
 
-# ---- 滚动压缩（真实 LLM 摘要；降级路径用失败桩）----
+# ---- 滚动压缩（FakeLLM 摘要；降级路径用失败桩）----
 
 
 def _fill_messages(session, n):
@@ -125,10 +140,20 @@ def _fill_messages(session, n):
 
 @pytest.mark.asyncio
 async def test_compaction_summarizes_overflow_keeps_window(mem, replies, monkeypatch):
-    """超阈值：溢出被真实 LLM 压缩进 summary，窗口内消息完整保留。"""
-    monkeypatch.setattr(settings, "console_context_window", 4)
-    monkeypatch.setattr(settings, "session_compact_trigger", 8)
-    agent = _agent(mem, replies)
+    """超阈值：溢出被压缩进 summary，窗口内消息完整保留。"""
+    monkeypatch.setattr("app.config.settings.console_context_window", 4)
+    monkeypatch.setattr("app.config.settings.session_compact_trigger", 8)
+
+    class SummaryLLM:
+        prompts: list[str] = []
+
+        async def complete(self, system, user, *, model=None):
+            if "摘要员" in system:
+                SummaryLLM.prompts.append(user)
+                return "## 当前主题\n模块0到模块3的设计讨论，核心是历史兼容与性能折中。"
+            return "x"
+
+    agent = _agent(mem, replies, ['{"action":"answer","answer":"好"}'])
 
     await agent.handle(make_msg("随便问一句触发持久化"))
     sess = await mem.load_session("c1")
@@ -136,10 +161,10 @@ async def test_compaction_summarizes_overflow_keeps_window(mem, replies, monkeyp
     await mem.save_session(sess)
 
     from app.console.compaction import maybe_compact
-    await maybe_compact(sess, agent._router.llm)
+    await maybe_compact(sess, SummaryLLM())
 
     assert sess.summary, "应产出摘要"
-    assert "模块" in sess.summary or "发布" in sess.summary or len(sess.summary) > 20
+    assert "模块" in sess.summary
     assert len(sess.messages) == 4              # 只剩窗口
     assert sess.messages[-1].text.startswith("回答3")
     assert all(not m.text.startswith("问题0") for m in sess.messages)  # 溢出已删
@@ -148,8 +173,8 @@ async def test_compaction_summarizes_overflow_keeps_window(mem, replies, monkeyp
 @pytest.mark.asyncio
 async def test_compaction_filters_mechanical_replies(mem, replies, monkeypatch):
     """机械回复不进摘要输入（直接构造消息，纯函数级验证）。"""
-    monkeypatch.setattr(settings, "console_context_window", 2)
-    monkeypatch.setattr(settings, "session_compact_trigger", 1)
+    monkeypatch.setattr("app.config.settings.console_context_window", 2)
+    monkeypatch.setattr("app.config.settings.session_compact_trigger", 1)
 
     from app.console.compaction import maybe_compact
 
@@ -187,9 +212,9 @@ async def test_compaction_fallback_when_llm_fails(mem, replies, monkeypatch):
         async def complete(self, system, user, *, model=None):
             raise RuntimeError("simulated 429")
 
-    monkeypatch.setattr(settings, "console_context_window", 2)
-    monkeypatch.setattr(settings, "session_compact_trigger", 4)
-    agent = _agent(mem, replies)
+    monkeypatch.setattr("app.config.settings.console_context_window", 2)
+    monkeypatch.setattr("app.config.settings.session_compact_trigger", 4)
+    agent = _agent(mem, replies, ['{"action":"answer","answer":"好"}'])
 
     await agent.handle(make_msg("触发持久化"))
     sess = await mem.load_session("c1")
@@ -205,8 +230,8 @@ async def test_compaction_fallback_when_llm_fails(mem, replies, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_compaction_not_triggered_below_threshold(mem, replies, monkeypatch):
-    monkeypatch.setattr(settings, "session_compact_trigger", 40)
-    agent = _agent(mem, replies)
+    monkeypatch.setattr("app.config.settings.session_compact_trigger", 40)
+    agent = _agent(mem, replies, ['{"action":"answer","answer":"好"}'])
     await agent.handle(make_msg("普通问题"))
 
     sess = await mem.load_session("c1")
