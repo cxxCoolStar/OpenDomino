@@ -143,7 +143,8 @@ async def test_pending_consumed_on_answer(env):
     mem, replies, _ = env
     llm = FakeLLM([
         '{"action":"clarify","clarify_question":"哪个仓库？"}',
-        '{"action":"delegate","pending_resolution":"answered","task":{"title":"改bug","instruction":"在 shop-frontend 修复登录按钮不响应","repo":"shop-frontend"}}',
+        '{"action":"delegate","pending_resolution":"answered",'
+        '"task":{"title":"改bug","instruction":"在 shop-frontend 修复登录按钮不响应","repo":"shop-frontend"}}',
     ])
 
     async def reply(c, t, webhook=""):

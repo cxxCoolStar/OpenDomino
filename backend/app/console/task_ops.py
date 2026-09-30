@@ -82,7 +82,8 @@ class TaskOpHandler:
         if not tasks:
             return "本群还没有提交过任务。要做事可以说「帮我到某仓库排查/修改…」。"
         lines = [await self._render_one(t) for t in tasks]
-        return "本群最近的任务：\n" + "\n".join(lines) + "\n\n问单个任务详情请带任务号，如「#" + _short(tasks[0].id) + " 怎么样了」。"
+        tail = f"问单个任务详情请带任务号，如「#{_short(tasks[0].id)} 怎么样了」。"
+        return "本群最近的任务：\n" + "\n".join(lines) + "\n\n" + tail
 
     async def _render_one(self, task: Task, *, with_events: bool = False) -> str:
         icon = _STATUS_ICON.get(task.status, task.status.value)
@@ -94,7 +95,10 @@ class TaskOpHandler:
             parts.append(f"分支 `{task.branch_name}`")
         if task.error:
             parts.append(f"原因：{task.error[:120]}")
-        stale_hint = " ⚠️ 超过 " + str(settings.sandbox_stale_minutes) + " 分钟无新进展，可能停滞" if _is_stale(task) else ""
+        stale_hint = (
+            " ⚠️ 超过 " + str(settings.sandbox_stale_minutes) + " 分钟无新进展，可能停滞"
+            if _is_stale(task) else ""
+        )
         line = f"- {parts[0]}（{'，'.join(parts[1:])}）{stale_hint}" if len(parts) > 1 else f"- {parts[0]}{stale_hint}"
         if not with_events:
             return line
@@ -118,7 +122,8 @@ class TaskOpHandler:
         if task is None or task.chat_id != chat_id:
             return f"本群没有找到任务 #{_short(tid)}。"
         if task.status != TaskStatus.RUNNING:
-            return f"任务 #{_short(tid)} 当前是「{_STATUS_ICON.get(task.status, task.status.value)}」，不在执行中，中途指示只在执行时有效。"
+            icon = _STATUS_ICON.get(task.status, task.status.value)
+            return f"任务 #{_short(tid)} 当前是「{icon}」，不在执行中，中途指示只在执行时有效。"
         ok = await self._control.steer(tid, message)
         if not ok:
             return f"任务 #{_short(tid)} 刚好结束了，指示未能传达。可以看它的结果再决定要不要新起任务。"

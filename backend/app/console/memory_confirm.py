@@ -228,6 +228,7 @@ class MemoryConfirmHandler:
         log.info("memory draft created: chat=%s memory=%s", msg.chat_id, memory_id)
         await reply(
             msg.chat_id,
-            f"我准备保存这条团队记忆：\n「{content}」\n回复「确认」保存，「取消」放弃（{settings.memory_confirm_ttl_minutes} 分钟内有效）。",
+            f"我准备保存这条团队记忆：\n「{content}」\n"
+            f"回复「确认」保存，「取消」放弃（{settings.memory_confirm_ttl_minutes} 分钟内有效）。",
             msg.session_webhook,
         )

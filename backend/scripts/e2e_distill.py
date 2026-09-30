@@ -44,11 +44,11 @@ os.environ["DISTILL_FAILURE_RETRY_MINUTES"] = "30"
 os.environ["DISTILL_SCAN_INTERVAL_SECONDS"] = "60"
 os.environ["MEMORY_CONFIRM_TTL_MINUTES"] = "60"
 
-from app.channels.base import UnifiedMessage                      # noqa: E402
-from app.config import settings                                   # noqa: E402
-from app.console.distiller import Distiller                       # noqa: E402
-from app.console.memory_confirm import MemoryConfirmHandler       # noqa: E402
-from app.memory.service import SQLiteMemoryService                # noqa: E402
+from app.channels.base import UnifiedMessage  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.console.distiller import Distiller  # noqa: E402
+from app.console.memory_confirm import MemoryConfirmHandler  # noqa: E402
+from app.memory.service import SQLiteMemoryService  # noqa: E402
 from app.memory.types import ChatMessage, MemoryDraft, PendingState  # noqa: E402
 
 PASS: list[dict] = []
@@ -118,6 +118,7 @@ async def settle(memory: SQLiteMemoryService, chat_id: str, msgs: list[ChatMessa
     assert added == len(msgs), f"save_observed added={added}"
     received = time.time() - age_seconds
     from sqlalchemy import update
+
     from app.memory.service import ObservedMessageRow
     async with memory._session() as s:
         await s.execute(
@@ -188,6 +189,7 @@ async def test_first_seen_anchor_ignores_zero_received(memory: SQLiteMemoryServi
     全群无有效 received_at 时取当前时刻。
     """
     from sqlalchemy import update
+
     from app.memory.service import ObservedMessageRow
 
     async def zero_received(chat_id: str) -> None:
@@ -302,8 +304,9 @@ async def test_reject_archive_and_dedup(memory: SQLiteMemoryService) -> None:
 
     async def dump_rows(tag: str):
         async with memory._session() as s:
-            from app.memory.service import MemoryRow as MR
             from sqlalchemy import select as sel
+
+            from app.memory.service import MemoryRow as MR
             rows = (await s.execute(sel(MR).where(MR.source_chat_id == chat))).scalars().all()
         print(f"[11:{tag}] rows={[(r.id[:6], str(r.status), round(r.rejected_at,1)) for r in rows]}", flush=True)
 
@@ -374,6 +377,7 @@ async def test_reject_archive_and_dedup(memory: SQLiteMemoryService) -> None:
 
     # ---- 11f: 半衰期翻案（rejected_at 拨回 91 天前 → 同类候选放行）----
     from sqlalchemy import update
+
     from app.memory.service import MemoryRow
     async with memory._session() as s:
         await s.execute(update(MemoryRow).where(MemoryRow.id == mid)
@@ -562,6 +566,7 @@ async def test_prune_watermark(memory: SQLiteMemoryService) -> None:
     oc_prune_nostate：群无水位线记录 → 整体不清理。
     """
     from sqlalchemy import update
+
     from app.memory.service import ObservedMessageRow
 
     async def backdate_received(chat_id: str, message_id: str, received: float) -> None:

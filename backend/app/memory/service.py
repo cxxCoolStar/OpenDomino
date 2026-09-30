@@ -15,18 +15,19 @@ import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
-from sqlalchemy.engine import make_url
+
 from sqlalchemy import Float, String, Text, delete, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import settings
-from app.memory.repo_types import Repo, new_repo_id
 from app.memory.embedding import (
     EmbeddingClient,
     NullEmbeddingClient,
     create_embedding_client,
 )
+from app.memory.repo_types import Repo, new_repo_id
 from app.memory.types import (
     ChatMessage,
     DistillState,

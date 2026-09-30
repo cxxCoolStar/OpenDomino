@@ -283,7 +283,10 @@ class SandboxAgent:
             result.summary = await self._force_summary(messages)
             result.exit_reason = "canceled"
             result.steps_used = guard.steps
-        exit_line = "（收到取消，已停止并汇总）" if canceled else f"执行循环结束（{result.exit_reason}，{result.steps_used} 步）"
+        exit_line = (
+            "（收到取消，已停止并汇总）" if canceled
+            else f"执行循环结束（{result.exit_reason}，{result.steps_used} 步）"
+        )
         await emit("stage_exit", exit_line)
         return result
 
