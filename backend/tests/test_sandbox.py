@@ -305,6 +305,38 @@ async def test_patch_replace_missing_file_errors(ws_root):
     assert _err_of(out)
 
 
+@pytest.mark.asyncio
+async def test_patch_replace_string_boolean_coerced(ws_root):
+    # 模型会把布尔序列化成字符串：bool("false") 恒为 True，dispatch 层必须按
+    # schema 强转，否则 replace_all="false" 语义反转（想改 1 处实际全改且无报错）
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await _dispatch_patch_replace(
+        ctx, path="demo.py", old_string="return 1", new_string="return 2",
+        replace_all="false")
+    assert _err_of(out) is not None  # 不唯一 → 如实报错，而不是静默全量替换
+    assert (ws_root / "demo.py").read_text(encoding="utf-8").count("return 1") == 2
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_schema_legal_call_succeeds(ws_root):
+    # schema 只有 diff 参数：handler 不得读 args["path"]（曾 KeyError——补丁已
+    # 落地却回错误信封，模型收到失败信号后重试/换招，并污染连败护栏计数）
+    (ws_root / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    diff = (
+        "*** Begin Patch\n"
+        "*** Update File: mod.py\n"
+        "@@\n"
+        "-x = 1\n"
+        "+x = 2\n"
+        "*** End Patch\n"
+    )
+    out = await dispatch_tool("apply_patch", {"diff": diff}, ctx)
+    assert _err_of(out) is None
+    assert "mod.py" in out
+    assert "x = 2" in (ws_root / "mod.py").read_text(encoding="utf-8")
+
+
 def test_failed_result_envelope():
     assert _is_failed_result(json.dumps({"error": "boom"}))
     assert not _is_failed_result("")

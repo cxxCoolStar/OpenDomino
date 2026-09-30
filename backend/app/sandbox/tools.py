@@ -307,7 +307,10 @@ async def _h_apply_patch(args: dict, ctx: ToolContext) -> str:
     r = await asyncio.to_thread(ops.patch_v4a, args["diff"])
     if r.error:
         return _err(r.error)
-    return _wrap(f"ok: applied patch to {args['path']}")
+    # V4A 补丁可跨多文件，路径以 vendor 的 PatchResult 为准
+    # （schema 只有 diff 参数，args 里没有 path）
+    touched = r.files_modified + r.files_created + r.files_deleted
+    return _wrap(f"ok: applied patch ({len(touched)} file(s): {', '.join(touched) or 'none'})")
 
 
 async def _h_run_command(args: dict, ctx: ToolContext) -> str:
@@ -347,13 +350,38 @@ def build_tool_definitions() -> list[dict]:
     return [{"type": "function", "function": s} for s in _SCHEMAS.values()]
 
 
+def _coerce_args(args: dict, schema: dict) -> dict:
+    """按 schema 声明把字符串参数强转类型（模型会把布尔/数字序列化成字符串）。
+
+    关键是布尔：bool("false") 是 True，不转则 replace_all="false" 语义反转
+    （模型想只改一处，实际全部替换且收到 ok，无任何报错）。
+    """
+    props = (schema.get("parameters") or {}).get("properties") or {}
+    out = dict(args)
+    for key, value in args.items():
+        prop = props.get(key)
+        if prop is None or not isinstance(value, str):
+            continue
+        t = prop.get("type")
+        try:
+            if t == "boolean":
+                out[key] = value.strip().lower() in ("1", "true", "yes", "on")
+            elif t == "integer":
+                out[key] = int(value)
+            elif t == "number":
+                out[key] = float(value)
+        except ValueError:
+            pass  # 转不动就原样传给 handler，由工具自身报错
+    return out
+
+
 async def dispatch_tool(name: str, args: dict, ctx: ToolContext) -> str:
     """工具调度入口。任何异常都转为错误信封返回，绝不中断执行循环。"""
     handler = _HANDLERS.get(name)
     if handler is None:
         return _err(f"未知工具: {name}。可用工具: {', '.join(_HANDLERS)}")
     try:
-        return await handler(args or {}, ctx)
+        return await handler(_coerce_args(args or {}, _SCHEMAS.get(name, {})), ctx)
     except Exception as e:  # noqa: BLE001
         log.warning("tool %s failed: %s: %s", name, type(e).__name__, e)
         return _err(f"{type(e).__name__}: {e}")
