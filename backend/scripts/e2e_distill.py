@@ -177,7 +177,72 @@ async def test_first_seen_and_idle_trigger(memory: SQLiteMemoryService) -> None:
         check("2. 空闲触发：提议消息带确认提示", "确认" in rec.replies[0][1] and "取消" in rec.replies[0][1])
 
 
-# ---------- 4. 三态水位线（确认/取消/过期） ----------
+# ---------- 2z. 首见锚点回归锁（2026-09-30 事故根因 2） ----------
+
+async def test_first_seen_anchor_ignores_zero_received(memory: SQLiteMemoryService) -> None:
+    """received_at=0 的存量行不充当首见锚点。
+
+    received_at 字段引入前的存量行 received_at=0；若锚点取到 0，水位线=0，
+    全部历史（含存量）落入未蒸馏侧，蒸馏器每冷却周期重蒸重提（2026-09-30
+    生产事故：同一结论被提议 3 次）。修复后锚点取 >0 的最大 received_at，
+    全群无有效 received_at 时取当前时刻。
+    """
+    from sqlalchemy import update
+    from app.memory.service import ObservedMessageRow
+
+    async def zero_received(chat_id: str) -> None:
+        async with memory._session() as s:
+            await s.execute(
+                update(ObservedMessageRow)
+                .where(ObservedMessageRow.chat_id == chat_id)
+                .values(received_at=0)
+            )
+            await s.commit()
+
+    # 场景1：全群都是 received_at=0 的存量 → 锚点=当前时刻，存量不蒸、LLM 不被调用
+    chat = "oc_legacy"
+    legacy_ts = time.time() - 2 * 86400
+    await memory.save_observed(chat, obs_msgs(chat, 3, legacy_ts))
+    await zero_received(chat)
+    state = await memory.get_distill_state(chat)
+    undistilled = await memory.count_undistilled(chat, state.watermark_ts)
+    check("2z. 首见锚点：received_at=0 存量不充当锚点（锚点>0 且存量不蒸）",
+          state.watermark_ts > 0 and undistilled == 0,
+          f"wm={state.watermark_ts} undistilled={undistilled}")
+
+    llm = FakeLLM(['{"distilled": true, "statement": "不应被蒸出的结论。"}'])
+    d = Distiller(memory, llm, chat_locks={}, reply=make_reply(Recorder()))
+    await d._maybe_distill(chat)
+    check("2z. 事故锁：存量群首扫不触发蒸馏调用", llm.calls == 0, f"calls={llm.calls}")
+
+    # 场景2：混合——存量 received_at=0 + 回拉行 received_at=now → 锚点=最大有效
+    # received_at；存量（timestamp 恒早）不落入未蒸馏侧
+    chat2 = "oc_mixed"
+    await memory.save_observed(chat2, obs_msgs(chat2, 3, legacy_ts))
+    await zero_received(chat2)
+    await memory.save_observed(chat2, [ChatMessage(
+        role="user", text="刚回拉落库的消息", user_id="u",
+        message_id=f"{chat2}-fresh", timestamp=time.time() - 30,
+    )])
+    state2 = await memory.get_distill_state(chat2)
+    undistilled2 = await memory.count_undistilled(chat2, state2.watermark_ts)
+    check("2z. 首见锚点：混合存量时取最大有效 received_at，存量不蒸",
+          state2.watermark_ts > legacy_ts and undistilled2 == 0,
+          f"wm={state2.watermark_ts} legacy_ts={legacy_ts} undistilled={undistilled2}")
+
+    # 场景3：锚点确立后新消息正常蒸馏（修复不冻结管线）
+    await settle(memory, chat, obs_msgs(chat, 2, time.time() + 10), age_seconds=IDLE + 60)
+    state1b = await memory.get_distill_state(chat)
+    state1b.last_success_at = 0.0
+    await memory.save_distill_state(state1b)
+    llm.outputs = ['{"distilled": false}']
+    await d._maybe_distill(chat)
+    state1c = await memory.get_distill_state(chat)
+    check("2z. 不冻结：锚点确立后的新消息仍正常蒸馏且水位线推进",
+          llm.calls == 1 and state1c.watermark_ts > state.watermark_ts,
+          f"calls={llm.calls} wm={state1c.watermark_ts}")
+
+
 
 async def test_three_states(memory: SQLiteMemoryService) -> None:
     handler = MemoryConfirmHandler(memory)
@@ -543,6 +608,7 @@ async def main() -> None:
     await memory.init()
 
     await test_first_seen_and_idle_trigger(memory)
+    await test_first_seen_anchor_ignores_zero_received(memory)
     await test_three_states(memory)
     await test_supersedes(memory)
     await test_prune_watermark(memory)

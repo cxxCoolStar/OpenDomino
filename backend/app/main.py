@@ -189,11 +189,23 @@ async def lifespan(app: FastAPI):
 
     ws_task = asyncio.create_task(channel.start(), name="feishu-ws")
     log.info("OpenDomino started; Feishu WS connecting")
-    if settings.distiller_enabled:
-        distiller.start()
 
     # 重启补拉：对已知群幂等回拉历史（ADR-008 旁听决策 4）
     backfill_task = asyncio.create_task(_backfill_known_chats(channel, memory), name="feishu-backfill")
+
+    # 蒸馏器首扫必须晚于回拉落库（ADR-009 首见决议）：首见锚点取「表内最新
+    # received_at」，回拉未落库时锚点早于回拉消息的消息时间戳，存量会被当作
+    # 未蒸馏范围反复重蒸（2026-09-30 事故根因 2 的放大器）。
+    if settings.distiller_enabled:
+        async def _start_distiller_after_backfill() -> None:
+            await backfill_task
+            distiller.start()
+
+        distiller_starter_task = asyncio.create_task(
+            _start_distiller_after_backfill(), name="distiller-starter"
+        )
+    else:
+        distiller_starter_task = None
 
     try:
         yield
@@ -201,7 +213,9 @@ async def lifespan(app: FastAPI):
         await distiller.stop()
         if syncer is not None:
             await syncer.stop()
-        for t in (ws_task, backfill_task):
+        for t in (ws_task, backfill_task, distiller_starter_task):
+            if t is None:
+                continue
             t.cancel()
             try:
                 await t

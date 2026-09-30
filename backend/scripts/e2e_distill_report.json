@@ -1,7 +1,7 @@
 {
   "adr": "ADR-009 旁听结论蒸馏",
-  "ts": "2026-09-30 11:32:39",
-  "passed": 29,
+  "ts": "2026-09-30 11:54:29",
+  "passed": 33,
   "failed": 0,
   "cases": [
     {
@@ -17,12 +17,12 @@
     {
       "name": "2. 空闲触发：pending_memory 就绪且 source=overheard",
       "ok": true,
-      "detail": "pending=PendingState(kind='memory_confirm', payload={'memory_id': '59d42ca4-65fb-4b9c-8bf0-196f946d1e62', 'source': 'overheard', 'watermark_ts': 1790739156.4931743}, created_at=1790739156.5888767)"
+      "detail": "pending=PendingState(kind='memory_confirm', payload={'memory_id': '5fcc53be-55a8-4970-beed-b43f05462b4b', 'source': 'overheard', 'watermark_ts': 1790740465.633404}, created_at=1790740465.7221694)"
     },
     {
       "name": "2. 空闲触发：水位线未提前推进",
       "ok": true,
-      "detail": "wm=1790739156.4698212 vs init=1790739156.4698212"
+      "detail": "wm=1790740465.5705607 vs init=1790740465.5705607"
     },
     {
       "name": "2. 空闲触发：提议消息带确认提示",
@@ -30,9 +30,29 @@
       "detail": ""
     },
     {
+      "name": "2z. 首见锚点：received_at=0 存量不充当锚点（锚点>0 且存量不蒸）",
+      "ok": true,
+      "detail": "wm=1790740465.7556114 undistilled=0"
+    },
+    {
+      "name": "2z. 事故锁：存量群首扫不触发蒸馏调用",
+      "ok": true,
+      "detail": "calls=0"
+    },
+    {
+      "name": "2z. 首见锚点：混合存量时取最大有效 received_at，存量不蒸",
+      "ok": true,
+      "detail": "wm=1790740465.7773974 legacy_ts=1790567665.7378845 undistilled=0"
+    },
+    {
+      "name": "2z. 不冻结：锚点确立后的新消息仍正常蒸馏且水位线推进",
+      "ok": true,
+      "detail": "calls=1 wm=1790740535.789751"
+    },
+    {
       "name": "4a. 确认：消费消息、条目 confirmed、水位线推进",
       "ok": true,
-      "detail": "consumed=True wm=1790739157.4595745"
+      "detail": "consumed=True wm=1790740466.6307008"
     },
     {
       "name": "4a. 确认：条目状态为 confirmed",
@@ -42,27 +62,27 @@
     {
       "name": "4b. 取消：水位线推进且草稿物理删除",
       "ok": true,
-      "detail": "consumed=True wm=1790739207.4810388 hit2=None"
+      "detail": "consumed=True wm=1790740516.6395907 hit2=None"
     },
     {
       "name": "4b2. 取消：句尾@粘连（取消@Domino）同样命中并推进水位线",
       "ok": true,
-      "detail": "consumed=True wm=1790739227.554001 hit=None"
+      "detail": "consumed=True wm=1790740536.693454 hit=None"
     },
     {
       "name": "4b3. 确认：句尾@粘连（确认@Domino）同样命中入库",
       "ok": true,
-      "detail": "consumed=True hit=MemoryHit(id='6ed76958-6ebd-4e3d-af66-c79a0779294d', title='测试结论', statement='oc_tri 的测试性结论条目。', memory_type='convention', rationale='', score=0.0, status=<MemoryStatus.CONFIRMED: 'confirmed'>)"
+      "detail": "consumed=True hit=MemoryHit(id='6bdc8238-90f2-47f4-b92c-e2321148d94b', title='测试结论', statement='oc_tri 的测试性结论条目。', memory_type='convention', rationale='', score=0.0, status=<MemoryStatus.CONFIRMED: 'confirmed'>)"
     },
     {
       "name": "4b4. 边界：@剥离后非精确关键词不消费（放行路由器）",
       "ok": true,
-      "detail": "consumed=False hit=MemoryHit(id='b4dc0a17-0e11-487c-b5fa-71e7dd3e04ad', title='测试结论', statement='oc_tri 的测试性结论条目。', memory_type='convention', rationale='', score=0.0, status=<MemoryStatus.PENDING: 'pending'>)"
+      "detail": "consumed=False hit=MemoryHit(id='55a34e09-58a4-4a17-9fc4-85464731bc55', title='测试结论', statement='oc_tri 的测试性结论条目。', memory_type='convention', rationale='', score=0.0, status=<MemoryStatus.PENDING: 'pending'>)"
     },
     {
       "name": "4c. 过期：草稿物理删除、水位线不动",
       "ok": true,
-      "detail": "consumed=False hit3=None wm=1790739237.62506"
+      "detail": "consumed=False hit3=None wm=1790740546.7508864"
     },
     {
       "name": "5. supersedes 前旧条目可召回",
@@ -112,7 +132,7 @@
     {
       "name": "7. 冷却：成功提议后水位线未推进",
       "ok": true,
-      "detail": "wm=1790737959.1116214"
+      "detail": "wm=1790739268.8981085"
     },
     {
       "name": "8. 槽位占用：人工提议未决时蒸馏跳过",
@@ -127,17 +147,17 @@
     {
       "name": "9. 单提议上限：多条候选只产出一条提议",
       "ok": true,
-      "detail": "pending=PendingState(kind='memory_confirm', payload={'memory_id': '1c8c433b-9dab-4d6d-be04-6d14bf8440f3', 'source': 'overheard', 'watermark_ts': 1790738499.3152032}, created_at=1790739159.3600726)"
+      "detail": "pending=PendingState(kind='memory_confirm', payload={'memory_id': '9e34c650-bdd5-4191-b055-c785af153371', 'source': 'overheard', 'watermark_ts': 1790739809.0602698}, created_at=1790740469.0989718)"
     },
     {
       "name": "3. 写前校验：讨论恢复后结果作废、水位线不动、无提议",
       "ok": true,
-      "detail": "calls=1 wm=1790737959.3812346 pending=None"
+      "detail": "calls=1 wm=1790739269.1132002 pending=None"
     },
     {
       "name": "7. 失败冷却：失败后水位线不动",
       "ok": true,
-      "detail": "wm=1790737959.4401445"
+      "detail": "wm=1790739269.1594915"
     },
     {
       "name": "7. 失败冷却：30 分钟内不重试",
@@ -147,7 +167,7 @@
     {
       "name": "7. 失败冷却：冷却过期后恢复蒸馏",
       "ok": true,
-      "detail": "calls=2 wm=1790738499.447316"
+      "detail": "calls=2 wm=1790739809.1648142"
     }
   ]
 }

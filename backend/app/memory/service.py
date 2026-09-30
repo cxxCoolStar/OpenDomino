@@ -703,10 +703,11 @@ class SQLiteMemoryService:
     ) -> DistillState:
         """取蒸馏游标；首见按 init_watermark 初始化落库。
 
-        init_watermark 语义：首见取 None 时实现取「当前表内最新 received_at」。
-        水位线与消息 timestamp 比较，而首见锚点取 received_at——存量消息（含回拉，
-        timestamp 恒早于落库时刻）的 timestamp 恒小于该锚点，天然落入已覆盖侧，
-        首见不蒸存量（ADR-009 首见决议）；显式传 0.0 表示全量蒸馏（测试用）。
+        init_watermark 语义：首见取 None 时实现取「当前表内最新 received_at」
+        （received_at=0 的存量行忽略，见下方查询注释）。水位线与消息 timestamp
+        比较，而首见锚点取 received_at——存量消息（含回拉，timestamp 恒早于落库
+        时刻）的 timestamp 恒小于该锚点，天然落入已覆盖侧，首见不蒸存量
+        （ADR-009 首见决议）；显式传 0.0 表示全量蒸馏（测试用）。
         """
         async with self._session() as s:
             row = await s.get(DistillStateRow, chat_id)
@@ -716,10 +717,14 @@ class SQLiteMemoryService:
                     last_success_at=row.last_success_at, last_failure_at=row.last_failure_at,
                 )
             if init_watermark is None:
+                # received_at=0 的行是 received_at 字段引入前的存量（或未走 save_observed
+                # 的测试数据），不是「刚回拉落库」的真实锚点。若取到 0 当锚点，水位线=0
+                # 会让全部历史（含存量）落入未蒸馏侧被反复重蒸（2026-09-30 事故根因 2）。
                 latest = (
                     await s.execute(
                         select(ObservedMessageRow.received_at)
-                        .where(ObservedMessageRow.chat_id == chat_id)
+                        .where(ObservedMessageRow.chat_id == chat_id,
+                               ObservedMessageRow.received_at > 0)
                         .order_by(ObservedMessageRow.received_at.desc())
                         .limit(1)
                     )
