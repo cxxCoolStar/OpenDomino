@@ -181,7 +181,6 @@ async def test_group_serialization_lock(env):
     async def reply(c, t, webhook=""):
         replies.append((c, t))
     agent = ConsoleAgent(mem, Router(llm), reply, _noop_delegate, _noop_task_op)
-    import asyncio
     await asyncio.gather(agent.handle(make_msg("q1")), agent.handle(make_msg("q2")))
     sess = await mem.load_session("c1")
     assert len(sess.messages) == 4  # 两 user + 两 assistant，串行无交错丢失

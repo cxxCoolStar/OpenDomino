@@ -109,7 +109,6 @@ async def test_correction_skipped_when_pending_memory_exists(mem, replies):
     agent = _agent(mem, replies)
     await agent.handle(make_msg("/沉淀 第一条约定：测试环境禁止直连生产库"))
     first = (await mem.load_session("c1")).pending_memory.payload["memory_id"]
-    n = len(replies.sent)
 
     await agent.handle(make_msg("对了你之前说的不对，发布必须走 O2 审批"))
     sess = await mem.load_session("c1")

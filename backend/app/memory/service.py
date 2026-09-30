@@ -14,6 +14,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 from sqlalchemy.engine import make_url
 from sqlalchemy import Float, String, Text, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -21,8 +22,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import settings
 from app.memory.repo_types import Repo, new_repo_id
-
-log = logging.getLogger(__name__)
 from app.memory.embedding import (
     EmbeddingClient,
     NullEmbeddingClient,
@@ -38,6 +37,11 @@ from app.memory.types import (
     PendingState,
     SessionContext,
 )
+
+log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.docs.knowledge import KnowledgeBase
 
 
 class Base(DeclarativeBase):
@@ -74,6 +78,7 @@ class MemoryRow(Base):
     supersedes_id: Mapped[str] = mapped_column(String(64), default="")   # ADR-009：替代的旧条目
     source_type: Mapped[str] = mapped_column(String(32), default="")     # manual | correction | overheard | task
     source_chat_id: Mapped[str] = mapped_column(String(128), default="") # 来源群（overheard 溯源）
+    rejected_at: Mapped[float] = mapped_column(Float, default=0.0)       # ADR-009 增补：被拒时刻（0=未被拒）
     created_by: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[float] = mapped_column(Float, default=0.0)
     updated_at: Mapped[float] = mapped_column(Float, default=0.0)
@@ -196,6 +201,7 @@ class SQLiteMemoryService:
                 "ALTER TABLE kbase_memories ADD COLUMN supersedes_id String(64) DEFAULT ''",
                 "ALTER TABLE kbase_memories ADD COLUMN source_type String(32) DEFAULT ''",
                 "ALTER TABLE kbase_memories ADD COLUMN source_chat_id String(128) DEFAULT ''",
+                "ALTER TABLE kbase_memories ADD COLUMN rejected_at Float DEFAULT 0",
             ):
                 try:
                     await conn.exec_driver_sql(ddl)
@@ -413,7 +419,8 @@ class SQLiteMemoryService:
             return MemoryHit(
                 id=r.id, title=r.title, statement=r.statement,
                 memory_type=r.memory_type, rationale=r.rationale,
-                status=MemoryStatus(r.status),
+                status=MemoryStatus(r.status), source_chat_id=r.source_chat_id,
+                rejected_at=r.rejected_at,
             )
 
     async def delete_memory(self, memory_id: str) -> bool:
@@ -430,6 +437,120 @@ class SQLiteMemoryService:
             except Exception:  # noqa: BLE001
                 log.warning("chroma delete failed for %s", memory_id)
         return True
+
+    async def reject_memory(self, memory_id: str) -> bool:
+        """取消转档案（ADR-009 增补）：overheard 草稿被明确拒绝时置 rejected 留档。
+
+        与物理删除的分工：只有「人明确拒绝」的 overheard 草稿转 rejected（查重闸
+        防重提）；过期清理、槽位惰性清理、人工来源草稿仍走 delete_memory 物理删除
+        （没人理过的提议不配进档案，人工草稿取消是用户撤回自己的话）。向量同步
+        更新 metadata（status=rejected），失败不影响留档主流程（查重闸 fail-open）。
+        """
+        async with self._session() as s:
+            row = await s.get(MemoryRow, memory_id)
+            if row is None:
+                return False
+            row.status = MemoryStatus.REJECTED.value
+            row.rejected_at = time.time()
+            row.updated_at = time.time()
+            await s.commit()
+        await self._index_memory_vector(memory_id)
+        return True
+
+    async def list_rejected_for_chat(self, chat_id: str, *, within_days: float) -> list[MemoryHit]:
+        """本群半衰期内的 rejected 条目（查重闸用；超期条目不再拦截，可翻案重提）。"""
+        cutoff = time.time() - within_days * 86400
+        async with self._session() as s:
+            rows = (
+                await s.execute(
+                    select(MemoryRow).where(
+                        MemoryRow.status == MemoryStatus.REJECTED.value,
+                        MemoryRow.source_chat_id == chat_id,
+                        MemoryRow.rejected_at > cutoff,
+                    )
+                )
+            ).scalars().all()
+        _dump = [(r.id[:8], r.status, r.source_chat_id, r.rejected_at) for r in rows]
+        log.warning("[list_rejected] chat=%s cutoff=%.0f dump=%s", chat_id, cutoff, _dump)
+        return [
+            MemoryHit(
+                id=r.id, title=r.title, statement=r.statement,
+                memory_type=r.memory_type, rationale=r.rationale,
+                status=MemoryStatus.REJECTED, source_chat_id=r.source_chat_id,
+                rejected_at=r.rejected_at,
+            )
+            for r in rows
+        ]
+
+    async def list_confirmed_all(self) -> list[MemoryHit]:
+        """全体 confirmed 条目（查重闸冷启动阶段全量比对用，非召回路径）。"""
+        async with self._session() as s:
+            rows = (
+                await s.execute(
+                    select(MemoryRow).where(MemoryRow.status == MemoryStatus.CONFIRMED.value)
+                )
+            ).scalars().all()
+        return [
+            MemoryHit(
+                id=r.id, title=r.title, statement=r.statement,
+                memory_type=r.memory_type, rationale=r.rationale,
+                status=MemoryStatus.CONFIRMED, source_chat_id=r.source_chat_id,
+            )
+            for r in rows
+        ]
+
+    async def find_dup(
+        self, statement: str, chat_id: str, *,
+        confirmed_threshold: float, rejected_threshold: float,
+        rejected_within_days: float,
+    ) -> tuple[str, float] | None:
+        """查重闸（ADR-009 增补）：候选结论与既有条目的相似度比对。
+
+        返回 ("confirmed"|"rejected", 相似度) 表示命中重复；None=无重复可提议。
+        confirmed 全量比对（条目少阶段），rejected 只比本群半衰期内的（拒绝是
+        本群人的表态，别的群拒绝不拦本群）。embedding 不可用/调用失败时返回
+        None（fail-open，降级回提示词软约束 + 人审兜底，绝不阻塞蒸馏）。
+        """
+        import sys as _sys
+        log.warning("[find_dup] called chat=%s stmt=%r", chat_id, statement[:30])
+        if self._embed is None or isinstance(self._embed, NullEmbeddingClient):
+            return None
+        try:
+            vecs = await self._embed.embed([statement])
+            vec = vecs[0] if vecs else None
+            if vec is None:
+                return None
+
+            def _cos(a: list[float], b: list[float]) -> float:
+                dot = sum(x * y for x, y in zip(a, b))
+                na = sum(x * x for x in a) ** 0.5
+                nb = sum(y * y for y in b) ** 0.5
+                return dot / (na * nb) if na and nb else 0.0
+
+            confirmed = await self.list_confirmed_all()
+            confirmed_vecs = await self._embed.embed(
+                [f"{h.title}\n{h.statement}" for h in confirmed]
+            ) if confirmed else []
+            for _hit, cvec in zip(confirmed, confirmed_vecs):
+                sim = _cos(vec, cvec)
+                if sim >= confirmed_threshold:
+                    return ("confirmed", sim)
+
+            rejected = await self.list_rejected_for_chat(
+                chat_id, within_days=rejected_within_days
+            )
+            log.warning("[find_dup] rejected rows=%s", len(rejected))
+            rejected_vecs = await self._embed.embed(
+                [f"{h.title}\n{h.statement}" for h in rejected]
+            ) if rejected else []
+            for _hit, rvec in zip(rejected, rejected_vecs):
+                sim = _cos(vec, rvec)
+                if sim >= rejected_threshold:
+                    return ("rejected", sim)
+            return None
+        except Exception:  # noqa: BLE001 —— 查重故障放行，不阻塞蒸馏
+            log.exception("dedup check failed, failing open")
+            return None
 
     # ---- 仓库注册与群绑定（M:N，ADR-003 群仓库绑定的 L2 落地）----
 

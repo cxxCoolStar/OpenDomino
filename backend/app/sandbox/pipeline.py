@@ -107,7 +107,7 @@ class TaskPipeline:
 
             # 提交与推送：模型可能已自行 commit（工作区 clean）——所以"是否产生提交"
             # 以 HEAD 是否领先 base_ref 为准；仍有未提交改动时补一次收尾提交。
-            sha = await git_ops.commit(executor, f"domino: {task.title}")   # 无改动时返回 None（已提交场景）
+            await git_ops.commit(executor, f"domino: {task.title}")   # 无改动时返回 None（已提交场景）
             commits = await git_ops.commit_log(executor, base_ref)
             if not commits:
                 error = "模型未产生任何代码提交，任务无法交付"

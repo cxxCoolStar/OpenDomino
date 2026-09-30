@@ -43,7 +43,7 @@ async def commit(executor: DockerExecutor, message: str, author: str = "OpenDomi
 
 async def push(executor: DockerExecutor, branch: str) -> bool:
     """推送任务分支到 origin。失败抛异常由上层转 TaskEvent。"""
-    out = await executor.exec(f"git push -u origin {branch} 2>&1", timeout=300)
+    await executor.exec(f"git push -u origin {branch} 2>&1", timeout=300)
     log.info("pushed branch=%s", branch)
     return True
 

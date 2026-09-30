@@ -695,7 +695,7 @@ async def test_pipeline_investigate_no_conclusion_fails():
 async def test_pipeline_modify_without_commits_fails():
     """变更任务 HEAD 未领先 base_ref → failed（防空转被误判完成——E2E 95a6e5d3 教训）。"""
     task = make_task(type_="modify")
-    tasks, pool, rep = FakeTasks(task), FakePool(), FakeReporter()
+    tasks, rep = FakeTasks(task), FakeReporter()
 
     class NoCommitExecutor(FakeExecutor):
         async def exec(self, command: str, *, timeout: float | None = None) -> str:
