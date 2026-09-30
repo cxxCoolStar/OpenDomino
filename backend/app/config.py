@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     distill_cooldown_minutes: int = 360     # 两次成功蒸馏最小间隔（每群每天最多 4 次）
     distill_failure_retry_minutes: int = 30 # 蒸馏失败后重试冷却
     distill_batch_max: int = 200            # 单次蒸馏消息数上限（最老优先，积压分批推进）
+    distill_dedup_enabled: bool = True      # 提议前查重闸（ADR-009 增补）；embedding 不可用时 fail-open
+    distill_dedup_confirmed_threshold: float = 0.85   # vs confirmed 相似度阈值（收紧，宁漏勿滥）
+    distill_dedup_rejected_threshold: float = 0.80    # vs 本群 rejected 阈值（放宽，唯一硬防线）
+    distill_rejected_half_life_days: int = 90         # 被拒档案半衰期（超期不再拦截，可翻案）
 
     # ---- ADR-011 知识库文档自动同步 ----
     kbsync_enabled: bool = True             # 总开关；false 不启动同步循环

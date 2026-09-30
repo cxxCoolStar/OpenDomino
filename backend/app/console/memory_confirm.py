@@ -22,7 +22,12 @@ import time
 
 from app.channels.base import UnifiedMessage
 from app.config import settings
-from app.memory.types import MemoryDraft, PendingState, SessionContext
+from app.memory.types import (
+    MEMORY_SOURCE_OVERHEARD,
+    MemoryDraft,
+    PendingState,
+    SessionContext,
+)
 
 log = logging.getLogger(__name__)
 
@@ -151,11 +156,18 @@ class MemoryConfirmHandler:
             await reply(msg.chat_id, f"已保存团队记忆：「{hit.title}」。", msg.session_webhook)
             return True
         if _is_exact(msg.text, cancel_keywords(), match=normalize_for_match):
-            await self._memory.delete_memory(memory_id)
+            # 被拒档案（ADR-009 增补）：仅 overheard 来源留档（防换装重提），
+            # 人工来源（/沉淀、记住、纠正）取消是撤回自己的话，照旧物理删除
+            source = session.pending_memory.payload.get("source", "")
+            if source == MEMORY_SOURCE_OVERHEARD:
+                await self._memory.reject_memory(memory_id)
+            else:
+                await self._memory.delete_memory(memory_id)
             # 三态语义：取消也推进——人已明确拒绝，下个周期不再重提（ADR-009）
             await self._advance_watermark(session)
             session.pending_memory = None
-            log.info("memory confirm cancelled: chat=%s memory=%s", msg.chat_id, memory_id)
+            log.info("memory confirm cancelled: chat=%s memory=%s source=%s archived=%s",
+                     msg.chat_id, memory_id, source or "manual", source == MEMORY_SOURCE_OVERHEARD)
             await reply(msg.chat_id, "好的，未保存。", msg.session_webhook)
             return True
         # 非确认/取消消息：pending_memory 保留（非阻塞提议），消息放行

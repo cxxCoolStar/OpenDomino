@@ -269,6 +269,26 @@ class Distiller:
                 await self._memory.delete_memory(old_id)
             session.pending_memory = None
 
+        # 查重闸（ADR-009 增补）：候选与 confirmed/本群 rejected 相似度比对，
+        # 命中重复则静默丢弃并推进水位线（等同「无可沉淀」），不发群消息。
+        # embedding 不可用/比对失败时 fail-open（find_dup 返回 None）。
+        if settings.distill_dedup_enabled and hasattr(self._memory, "find_dup"):
+            statement = str(data.get("statement") or "")
+            hit = await self._memory.find_dup(
+                statement, chat_id,
+                confirmed_threshold=settings.distill_dedup_confirmed_threshold,
+                rejected_threshold=settings.distill_dedup_rejected_threshold,
+                rejected_within_days=settings.distill_rejected_half_life_days,
+            )
+            if hit is not None:
+                kind, sim = hit
+                state.last_success_at = time.time()
+                state.watermark_ts = max(state.watermark_ts, batch_end_ts)
+                await self._memory.save_distill_state(state)
+                log.info("distill deduplicated: chat=%s hit=%s sim=%.3f statement=%r",
+                         chat_id, kind, sim, statement[:50])
+                return
+
         draft = MemoryDraft(
             title=str(data.get("title") or "")[:30] or "群聊结论",
             statement=str(data.get("statement") or ""),

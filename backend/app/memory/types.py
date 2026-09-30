@@ -62,6 +62,7 @@ class MemoryStatus(str, Enum):
     PENDING = "pending"
     CONFIRMED = "confirmed"
     ARCHIVED = "archived"
+    REJECTED = "rejected"   # 被拒档案（ADR-009 增补）：明确取消的 overheard 草稿，查重闸用
 
 
 # 记忆来源类型（ADR-009）：manual=/沉淀、记住；correction=纠正提炼；overheard=旁听蒸馏。
@@ -81,6 +82,8 @@ class MemoryHit:
     rationale: str = ""
     score: float = 0.0
     status: MemoryStatus = MemoryStatus.CONFIRMED
+    source_chat_id: str = ""            # 来源群（rejected 查重按同群过滤）
+    rejected_at: float = 0.0            # 被拒时刻（0=未被拒；半衰期判定用）
 
 
 @dataclass

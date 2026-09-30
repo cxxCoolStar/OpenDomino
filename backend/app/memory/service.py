@@ -470,8 +470,6 @@ class SQLiteMemoryService:
                     )
                 )
             ).scalars().all()
-        _dump = [(r.id[:8], r.status, r.source_chat_id, r.rejected_at) for r in rows]
-        log.warning("[list_rejected] chat=%s cutoff=%.0f dump=%s", chat_id, cutoff, _dump)
         return [
             MemoryHit(
                 id=r.id, title=r.title, statement=r.statement,
@@ -511,8 +509,6 @@ class SQLiteMemoryService:
         本群人的表态，别的群拒绝不拦本群）。embedding 不可用/调用失败时返回
         None（fail-open，降级回提示词软约束 + 人审兜底，绝不阻塞蒸馏）。
         """
-        import sys as _sys
-        log.warning("[find_dup] called chat=%s stmt=%r", chat_id, statement[:30])
         if self._embed is None or isinstance(self._embed, NullEmbeddingClient):
             return None
         try:
@@ -539,7 +535,6 @@ class SQLiteMemoryService:
             rejected = await self.list_rejected_for_chat(
                 chat_id, within_days=rejected_within_days
             )
-            log.warning("[find_dup] rejected rows=%s", len(rejected))
             rejected_vecs = await self._embed.embed(
                 [f"{h.title}\n{h.statement}" for h in rejected]
             ) if rejected else []

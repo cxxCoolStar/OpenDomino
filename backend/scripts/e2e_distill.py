@@ -243,6 +243,179 @@ async def test_first_seen_anchor_ignores_zero_received(memory: SQLiteMemoryServi
           f"calls={llm.calls} wm={state1c.watermark_ts}")
 
 
+# ---------- 11. 被拒档案与查重闸（ADR-009 增补，2026-09-30） ----------
+
+class FakeEmbed:
+    """确定性 embedding：文本含关键词返回固定方向的向量，用于查重闸验证。
+
+    「仓库地址」类文本 → 向量 A；「部署」类文本 → 向量 B；其余 → 零向量。
+    同类文本之间 cosine=1.0，跨类 0.0——阈值判定完全确定。
+    """
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        out = []
+        for t in texts:
+            if "仓库地址" in t or "github.com/cxxCoolStar" in t:
+                out.append([1.0, 0.0])
+            elif "部署" in t or "staging" in t:
+                out.append([0.0, 1.0])
+            else:
+                out.append([0.0, 0.0])
+        return out
+
+
+async def test_reject_archive_and_dedup(memory: SQLiteMemoryService) -> None:
+    """取消留档（rejected）→ 查重闸拦截换装重提 → 半衰期翻案 → fail-open。
+
+    每个场景独立建数据（前缀化 message_id / 独立草稿），顺序线性，
+    中间值用 print 直接输出，避免多场景共享状态导致的诡异污染。
+    """
+    handler = MemoryConfirmHandler(memory)
+    old_embed = memory._embed
+    memory._embed = FakeEmbed()
+    chat = "oc_rej"
+    print(f"[11] embed={type(memory._embed).__name__}", flush=True)
+
+    def msg(text: str) -> UnifiedMessage:
+        return UnifiedMessage(
+            chat_id=chat, user_id="u_admin", user_name="管理员",
+            message_id=f"msg-{time.time()}-{text}", text=text, is_at_bot=True,
+        )
+
+    async def make_overheard(statement: str) -> str:
+        mid = await memory.create_memory_draft(MemoryDraft(
+            title="仓库地址", statement=statement,
+            source_type="overheard", source_chat_id=chat,
+        ))
+        session = await memory.load_session(chat)
+        session.pending_memory = PendingState(
+            kind="memory_confirm",
+            payload={"memory_id": mid, "source": "overheard",
+                     "watermark_ts": time.time() - 100},
+        )
+        await memory.save_session(session)
+        return mid
+
+    async def cancel(mid: str) -> None:
+        session = await memory.load_session(chat)
+        await handler.try_handle(msg("取消"), session, _noop_reply)
+
+    async def dump_rows(tag: str):
+        async with memory._session() as s:
+            from app.memory.service import MemoryRow as MR
+            from sqlalchemy import select as sel
+            rows = (await s.execute(sel(MR).where(MR.source_chat_id == chat))).scalars().all()
+        print(f"[11:{tag}] rows={[(r.id[:6], str(r.status), round(r.rejected_at,1)) for r in rows]}", flush=True)
+
+    # ---- 11a: overheard 取消 → rejected 留档 ----
+    wm1 = time.time() - 100
+    mid = await make_overheard("OpenDomino 仓库地址是 github.com/cxxCoolStar/OpenDomino.git")
+    await cancel(mid)
+    hit = await memory.get_memory(mid)
+    check("11a. 取消留档：overheard 草稿转 rejected 且记录 rejected_at",
+          hit is not None and hit.status.value == "rejected" and hit.rejected_at > 0,
+          f"hit={hit}")
+    await dump_rows("after-11a")
+
+    # ---- 11b: 人工来源取消 → 物理删除 ----
+    mid_m = await memory.create_memory_draft(MemoryDraft(
+        title="人工", statement="人工沉淀。", source_type="manual", source_chat_id=chat))
+    session = await memory.load_session(chat)
+    session.pending_memory = PendingState(kind="memory_confirm", payload={"memory_id": mid_m})
+    await memory.save_session(session)
+    await cancel(mid_m)
+    hit_m = await memory.get_memory(mid_m)
+    check("11b. 人工来源取消：物理删除不留档", hit_m is None, f"hit={hit_m}")
+
+    # ---- 11c: 查重闸拦截换装重提 ----
+    dup = await memory.find_dup(
+        "opendomino 的代码在 github.com/cxxCoolStar/OpenDomino", chat,
+        confirmed_threshold=settings.distill_dedup_confirmed_threshold,
+        rejected_threshold=settings.distill_dedup_rejected_threshold,
+        rejected_within_days=settings.distill_rejected_half_life_days,
+    )
+    check("11c. 查重闸：rejected 换装重提被命中",
+          dup is not None and dup[0] == "rejected",
+          f"dup={dup}")
+    await dump_rows("after-11c")
+
+    # ---- 11d: 查重闸经 _propose 全链路生效（重提案被静默拦截）----
+    session = await memory.load_session(chat)
+    session.pending_memory = None
+    await memory.save_session(session)
+    rec = Recorder()
+    d = Distiller(memory, FakeLLM([]), chat_locks={}, reply=make_reply(rec))
+    state = await memory.get_distill_state(chat, init_watermark=wm1 - 1000)
+    print(f"[TIMESTAMP] 11d-propose-start t={time.time():.3f}", flush=True)
+    await d._propose(chat, state, wm1,
+                     {"statement": "opendomino 的代码在 github.com/cxxCoolStar/OpenDomino",
+                      "title": "仓库地址"})
+    print(f"[TIMESTAMP] 11d-propose-end t={time.time():.3f}", flush=True)
+    session = await memory.load_session(chat)
+    state_after = await memory.get_distill_state(chat)
+    check("11d. 查重闸全链路：_propose 拦截换装重提且水位线推进",
+          session.pending_memory is None and state_after.watermark_ts >= wm1,
+          f"pending={session.pending_memory} wm={state_after.watermark_ts}")
+
+    # ---- 11e: 不同主题正常放行 ----
+    state2 = await memory.get_distill_state(chat)
+    state2.watermark_ts = wm1 - 1000
+    await memory.save_distill_state(state2)
+    await d._propose(chat, state2, wm1,
+                     {"statement": "部署前必须在 staging 环境验证", "title": "部署约定"})
+    session = await memory.load_session(chat)
+    check("11e. 查重闸放行：不同主题正常建草稿提议",
+          session.pending_memory is not None,
+          f"pending={session.pending_memory}")
+    if session.pending_memory:
+        await memory.delete_memory(session.pending_memory.payload["memory_id"])
+        session.pending_memory = None
+        await memory.save_session(session)
+
+    # ---- 11f: 半衰期翻案（rejected_at 拨回 91 天前 → 同类候选放行）----
+    from sqlalchemy import update
+    from app.memory.service import MemoryRow
+    async with memory._session() as s:
+        await s.execute(update(MemoryRow).where(MemoryRow.id == mid)
+                        .values(rejected_at=time.time() - 91 * 86400))
+        await s.commit()
+    print(f"[TIMESTAMP] before-11f-update t={time.time():.3f}", flush=True)
+    state3 = await memory.get_distill_state(chat)
+    state3.watermark_ts = wm1 - 1000
+    await memory.save_distill_state(state3)
+    await d._propose(chat, state3, wm1,
+                     {"statement": "opendomino 的代码在 github.com/cxxCoolStar/OpenDomino",
+                      "title": "仓库地址"})
+    session = await memory.load_session(chat)
+    check("11f. 半衰期：超 90 天的 rejected 不再拦截（可翻案重提）",
+          session.pending_memory is not None,
+          f"pending={session.pending_memory}")
+    if session.pending_memory:
+        await memory.delete_memory(session.pending_memory.payload["memory_id"])
+        session.pending_memory = None
+        await memory.save_session(session)
+
+    # ---- 11g: fail-open（embedding 故障 → 放行不阻塞）----
+    class BoomEmbed:
+        async def embed(self, texts):
+            raise RuntimeError("embedding down")
+
+    memory._embed = BoomEmbed()
+    state4 = await memory.get_distill_state(chat)
+    state4.watermark_ts = wm1 - 1000
+    await memory.save_distill_state(state4)
+    await d._propose(chat, state4, wm1,
+                     {"statement": "opendomino 的代码在 github.com/cxxCoolStar/OpenDomino",
+                      "title": "仓库地址"})
+    session = await memory.load_session(chat)
+    check("11g. fail-open：embedding 故障时查重放行不阻塞提议",
+          session.pending_memory is not None,
+          f"pending={session.pending_memory}")
+    if session.pending_memory:
+        await memory.delete_memory(session.pending_memory.payload["memory_id"])
+
+    memory._embed = old_embed
+
 
 async def test_three_states(memory: SQLiteMemoryService) -> None:
     handler = MemoryConfirmHandler(memory)
@@ -285,8 +458,9 @@ async def test_three_states(memory: SQLiteMemoryService) -> None:
     consumed = await handler.try_handle(msg("取消"), session, _noop_reply)
     state = await memory.get_distill_state("oc_tri")
     hit2 = await memory.get_memory(mid2)
-    check("4b. 取消：水位线推进且草稿物理删除",
-          consumed and state.watermark_ts >= wm2 and hit2 is None,
+    check("4b. 取消：水位线推进且 overheard 草稿转 rejected 留档",
+          consumed and state.watermark_ts >= wm2
+          and hit2 is not None and hit2.status.value == "rejected" and hit2.rejected_at > 0,
           f"consumed={consumed} wm={state.watermark_ts} hit2={hit2}")
 
     # 4b 回归锁（2026-09-30 事故）：句尾 @ 粘连导致精确匹配失配——
@@ -299,7 +473,8 @@ async def test_three_states(memory: SQLiteMemoryService) -> None:
     state = await memory.get_distill_state("oc_tri")
     hit_suffix = await memory.get_memory(mid_suffix)
     check("4b2. 取消：句尾@粘连（取消@Domino）同样命中并推进水位线",
-          consumed and state.watermark_ts >= wm_suffix and hit_suffix is None,
+          consumed and state.watermark_ts >= wm_suffix
+          and hit_suffix is not None and hit_suffix.status.value == "rejected",
           f"consumed={consumed} wm={state.watermark_ts} hit={hit_suffix}")
 
     wm_mid = time.time() + 80
@@ -609,6 +784,7 @@ async def main() -> None:
 
     await test_first_seen_and_idle_trigger(memory)
     await test_first_seen_anchor_ignores_zero_received(memory)
+    await test_reject_archive_and_dedup(memory)
     await test_three_states(memory)
     await test_supersedes(memory)
     await test_prune_watermark(memory)
