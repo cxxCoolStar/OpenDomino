@@ -256,6 +256,41 @@ async def test_patch_replace_edits_file(ws_root):
 
 
 @pytest.mark.asyncio
+async def test_write_file_surfaces_lint_syntax_error(ws_root):
+    # vendor 写后 ast.parse 语法检查（WriteResult.lint）经 handler 呈现给模型：
+    # 写坏 .py 当轮即报语法错，不必等下一轮 run_command 跑测试才发现
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await dispatch_tool(
+        "write_file",
+        {"path": "bad.py", "content": "def broken(:\n    pass\n"},
+        ctx)
+    assert _err_of(out) is None  # 写入本身成功，错误只在 lint 附注里
+    assert "lint: syntax error in edit" in out
+    assert "SyntaxError" in out
+
+
+@pytest.mark.asyncio
+async def test_write_file_clean_lint_is_silent(ws_root):
+    # 语法正确时 lint 附注静默（ok/skipped 不占模型注意力）
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await dispatch_tool(
+        "write_file", {"path": "good.py", "content": "x = 1\n"}, ctx)
+    assert _err_of(out) is None
+    assert "lint" not in out
+
+
+@pytest.mark.asyncio
+async def test_patch_replace_surfaces_lint_syntax_error(ws_root):
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await _dispatch_patch_replace(
+        ctx, path="demo.py",
+        old_string="def ping():\n    return 1",
+        new_string="def ping():\n    return 1  (")
+    assert _err_of(out) is None
+    assert "lint: syntax error in edit" in out
+
+
+@pytest.mark.asyncio
 async def test_patch_replace_missing_string_errors(ws_root):
     ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
     out = await _dispatch_patch_replace(

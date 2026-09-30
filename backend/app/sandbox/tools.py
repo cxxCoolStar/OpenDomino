@@ -280,12 +280,26 @@ async def _h_grep(args: dict, ctx: ToolContext) -> str:
     return _wrap("\n".join(lines) or "（无匹配）")
 
 
+def _lint_note(lint: dict | None) -> str:
+    """vendor 写后语法检查（WriteResult.lint / PatchResult.lint）的呈现文本。
+
+    ok/skipped 不占用模型注意力（静默）；error 才拼出来——这是「编辑当下即报
+    语法错」的即时反馈，省掉一轮 run_command 才发现少括号。
+    """
+    if not lint:
+        return ""
+    if lint.get("status") == "error":
+        output = str(lint.get("output") or "").strip()
+        return f"\nlint: syntax error in edit: {output}" if output else "\nlint: syntax error in edit"
+    return ""
+
+
 async def _h_write_file(args: dict, ctx: ToolContext) -> str:
     ops = _get_file_ops(ctx)
     r = await asyncio.to_thread(ops.write_file, args["path"], args["content"])
     if r.error:
         return _err(r.error)
-    return _wrap(f"ok: wrote {args['path']} ({len(args['content'])} chars)")
+    return _wrap(f"ok: wrote {args['path']} ({len(args['content'])} chars){_lint_note(r.lint)}")
 
 
 async def _h_patch_replace(args: dict, ctx: ToolContext) -> str:
@@ -303,7 +317,9 @@ async def _h_patch_replace(args: dict, ctx: ToolContext) -> str:
         # hermes 的 already-applied 检测：重复投递已落地的编辑时不再报错，
         # 让模型直接继续而不是重读重补
         return _wrap(f"ok: edit already applied to {args['path']} (no change needed)")
-    return _wrap(f"ok: edited {args['path']} ({len(r.files_modified)} file(s) modified)")
+    return _wrap(
+        f"ok: edited {args['path']} ({len(r.files_modified)} file(s) modified){_lint_note(r.lint)}"
+    )
 
 
 async def _h_apply_patch(args: dict, ctx: ToolContext) -> str:
