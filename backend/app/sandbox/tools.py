@@ -46,6 +46,10 @@ class ToolContext:
     executor: Executor
     repo: str = ""
     task_id: str = ""
+    # 惰性持有的 ShellFileOperations：与 ctx 同生命周期（每任务一个实例），
+    # 不能按 id(executor) 存模块级缓存——条目永不清理是内存泄漏，且对象 GC 后
+    # id 复用会让新任务命中绑定旧容器的过期实例
+    _file_ops: Any | None = None
 
 
 # ---- 输出处理：脱敏 + 截断 ----
@@ -237,15 +241,12 @@ MUTATING_TOOLS = frozenset({"write_file", "patch_replace", "apply_patch"})
 from app.sandbox._vendor import file_operations as _hfo  # noqa: E402
 from app.sandbox.hermes_adapter import HermesEnvAdapter  # noqa: E402
 
-_ops_cache: dict[int, Any] = {}
-
 
 def _get_file_ops(ctx: ToolContext):
-    """每个 executor 复用一个 ShellFileOperations（内含 _has_command 缓存）。"""
-    key = id(ctx.executor)
-    if key not in _ops_cache:
-        _ops_cache[key] = _hfo.ShellFileOperations(HermesEnvAdapter(ctx.executor), cwd="/workspace")
-    return _ops_cache[key]
+    """每个 ctx 复用一个 ShellFileOperations（内含 _has_command 缓存）。"""
+    if ctx._file_ops is None:
+        ctx._file_ops = _hfo.ShellFileOperations(HermesEnvAdapter(ctx.executor), cwd="/workspace")
+    return ctx._file_ops
 
 
 def _tool_name(fn) -> str:

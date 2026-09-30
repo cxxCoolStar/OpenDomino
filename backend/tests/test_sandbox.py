@@ -343,6 +343,30 @@ def test_failed_result_envelope():
     assert not _is_failed_result(json.dumps({"ok": True}))
 
 
+# ---------- file ops 生命周期：随 ctx 走，不进模块级缓存 ----------
+
+
+@pytest.mark.asyncio
+async def test_file_ops_cached_per_context(ws_root):
+    # 同一 ctx 两次 read_file 复用同一 ShellFileOperations 实例
+    from app.sandbox.tools import _get_file_ops
+
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    ops1 = _get_file_ops(ctx)
+    ops2 = _get_file_ops(ctx)
+    assert ops1 is ops2
+    assert ctx._file_ops is ops1
+
+    # 不同 ctx（每任务一个）的实例互不相同——防 id(executor) 复用命中过期缓存
+    other = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t2")
+    assert _get_file_ops(other) is not ops1
+
+    # 经 dispatch 走真实调用后，同一 ctx 的复用仍成立（E2E 路径）
+    out = await dispatch_tool("read_file", {"path": "demo.py"}, ctx)
+    assert _err_of(out) is None
+    assert _get_file_ops(ctx) is ops1
+
+
 # ---------- agent：执行循环四场景 ----------
 
 
