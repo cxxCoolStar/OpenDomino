@@ -1,8 +1,14 @@
 # 待办交接：代码规范整治后续项
 
 > 日期：2026-09-30
-> 状态：待执行（本文档是新会话的执行输入，逐项独立实施）
+> 状态：P1 三项已全部完成（P1-1 `e8bfeb3`、P1-3 `848a599`、P1-2 `8dc34b4`，全量 98 测试 + lint 绿）；P2 仍待办
 > 关联：ADR-004、ADR-009、ADR-006、docs/standards/knowledge-doc-standard.md
+
+## 实施结果（2026-09-30 会话）
+
+- **P1-1 已完成**：缓存挪进 `ToolContext` 惰性字段 `_file_ops`，模块级 `_ops_cache` 已删除；防回归测试 `test_file_ops_cached_per_context` 断言同 ctx 复用、跨 ctx 互异。
+- **P1-3 已完成**：`same_call_limit` 改 `field(default_factory=...)` 惰性读取，与 `max_steps` 策略一致。
+- **P1-2 已完成（范围有一处调整）**：场景 1（纠正→correction_detected=true）经核对已由现有用例 `context-correction-detected.yaml` 覆盖，未重复补；实际新增 `context-no-false-correction.yaml`（场景 2）与 `context-compaction-on-overflow.yaml`（场景 3）。场景 3 需要的断言能力超出 runner 原有体系，已扩展 `run_golden.py`：`fixtures.settings` case 级覆盖（跑后回滚）+ `session_state` 断言（`summary_must_contain` / `messages_kept`）。两个新 case 本机真 LLM 各跑 100 分通过；不进 CI 门禁。
 
 ## 背景与当前基线
 
