@@ -43,7 +43,7 @@ class StepGuard:
     max_steps: int = field(default_factory=lambda: settings.sandbox_max_steps)
     steps: int = 0
 
-    same_call_limit: int = settings.sandbox_loop_same_call_limit
+    same_call_limit: int = field(default_factory=lambda: settings.sandbox_loop_same_call_limit)
     last_sig: tuple | None = None
     same_sig_count: int = 0
 
