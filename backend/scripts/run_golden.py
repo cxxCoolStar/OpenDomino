@@ -183,6 +183,16 @@ def grade_turn(expected: dict, outcome: dict) -> TurnResult:
     for anchor in expected.get("reply_must_contain") or []:
         if anchor not in outcome["reply"]:
             _deduct(deductions, 20, f"回复缺事实锚点 {anchor!r}")
+    # ---- session_state：压缩/窗口断言（打在落盘会话上，out 自带 session_snapshot）----
+    for anchor in expected.get("summary_must_contain") or []:
+        summary = (outcome.get("session_snapshot") or {}).get("summary") or ""
+        if anchor not in summary:
+            _deduct(deductions, 20, f"会话摘要缺锚点 {anchor!r}（压缩未产出或丢失结论）")
+    exp_kept = expected.get("messages_kept")
+    if exp_kept is not None:
+        kept = (outcome.get("session_snapshot") or {}).get("messages") or -1
+        if kept != int(exp_kept):
+            _deduct(deductions, 20, f"窗口保留期望 {exp_kept} 条，实际 {kept} 条")
 
     score = max(0, 100 - sum(d["points"] for d in deductions))
     return TurnResult(
@@ -213,6 +223,11 @@ async def run_case(case: dict, case_dir: Path) -> CaseResult:
     settings.memory_db_url = db_url
     settings.chroma_persist_dir = str(case_dir / "chroma")
     settings.console_llm_dump_dir = str(case_dir / "dump")
+    saved_settings: dict[str, object] = {}
+    fx_settings = (case.get("fixtures") or {}).get("settings") or {}
+    for key, value in fx_settings.items():
+        saved_settings[key] = getattr(settings, key)
+        setattr(settings, key, value)
     mem: SQLiteMemoryService | None = None
     try:
         embed = None if settings.embedding_model else NullEmbeddingClient()
@@ -297,6 +312,7 @@ async def run_case(case: dict, case_dir: Path) -> CaseResult:
                     result.turns.append(tr)
                     result.status = "error"
                     break
+                sess_after = await mem.load_session(chat_id)   # 供 session_state 类断言
                 outcome = {
                     "index": i,
                     "action": d.action.value,
@@ -308,6 +324,10 @@ async def run_case(case: dict, case_dir: Path) -> CaseResult:
                     "repo_op": d.repo_op.model_dump() if d.repo_op else {},
                     "task": d.task.model_dump() if d.task else {},
                     "correction_detected": d.correction_detected,
+                    "session_snapshot": {
+                        "summary": sess_after.summary,
+                        "messages": len(sess_after.messages),
+                    },
                     "decision_raw": {
                         "action": d.action.value,
                         "task": d.task.model_dump() if d.task else None,
@@ -346,6 +366,8 @@ async def run_case(case: dict, case_dir: Path) -> CaseResult:
             except Exception:  # noqa: BLE001
                 pass
         (settings.memory_db_url, settings.chroma_persist_dir, settings.console_llm_dump_dir) = saved
+        for _key, value in saved_settings.items():
+            setattr(settings, _key, value)
         result.duration_s = round(time.time() - t0, 1)
 
     return result

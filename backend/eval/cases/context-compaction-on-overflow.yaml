@@ -1,0 +1,33 @@
+id: context-compaction-on-overflow
+name: 超阈值会话滚动压缩 → 摘要产出且窗口保留
+category: context
+priority: P1
+fixtures:
+  settings:
+    console_context_window: 4
+    session_compact_trigger: 6
+  session_messages:
+    - role: user
+      text: "问题0：domino 的容器池化在哪实现？"
+    - role: assistant
+      text: "回答0：容器池化实现在 backend/app/sandbox/container.py，按 repo 维护容器池。"
+    - role: user
+      text: "问题1：那空闲容器多久被驱逐？"
+    - role: assistant
+      text: "回答1：空闲容器超过 10 分钟会被驱逐回收。"
+    - role: user
+      text: "问题2：驱逐时容器里的未提交改动怎么处理？"
+    - role: assistant
+      text: "回答2：驱逐前未提交改动会被丢弃，池子只回收干净容器。"
+    - role: user
+      text: "问题3：那我们该约定改动多久提交一次？"
+    - role: assistant
+      text: "回答3：约定改动当天必须提交，避免被驱逐丢失。"
+turns:
+  - input: "别往下查了，先把我们前面聊的内容捋一下，讨论到哪了？"
+    expected:
+      action: answer
+      summary_must_contain: ["container.py"]
+      messages_kept: 5
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "本 turn 触发第 9 条消息进入，超 session_compact_trigger=6 → 溢出 5 条（问题0~问题2）压进摘要，窗口保留最近 4 条，再加本轮回复 1 条落盘共 5（回复在压缩后追加）。检验 maybe_compact 真链路：摘要含已解决问答的结论锚点，窗口计数准确。提问刻意要求复述历史而非查仓库，避免路由成 delegate 偏离本 case 的压缩考察点。"

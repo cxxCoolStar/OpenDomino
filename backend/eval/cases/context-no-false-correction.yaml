@@ -1,0 +1,11 @@
+id: context-no-false-correction
+name: 非纠正普通陈述 → 不误标 correction_detected
+category: context
+priority: P1
+turns:
+  - input: "今天下午三点开迭代评审会，大家记得参加。"
+    expected:
+      action: answer
+      correction_detected: false
+scoring: {mode: deduction, max_score: 100, pass_threshold: 80}
+notes: "普通陈述误标 correction_detected 会误触发纠正提炼草稿挂确认，污染记忆确认流。与 context-correction-detected 互为正反例。"
