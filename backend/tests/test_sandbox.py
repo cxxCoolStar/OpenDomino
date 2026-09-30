@@ -186,7 +186,7 @@ async def test_dispatch_and_sanitize(monkeypatch):
 
     names = {d["function"]["name"] for d in build_tool_definitions()}
     assert {"list_dir", "read_file", "grep", "write_file", "patch_replace",
-            "apply_patch", "run_command", "git_diff", "git_log"} <= names
+            "apply_patch", "run_command", "git_diff", "git_log", "delete_file"} <= names
 
 
 # ---------- patch_replace：真实 vendor 栈 + 本地 sh 的 E2E ----------
@@ -198,12 +198,21 @@ class LocalShExecutor:
     """把命令交给本地 sh 在临时目录执行，输出契约与 DockerExecutor 一致（尾部 [exit N]）。"""
 
     def __init__(self, root) -> None:
+        import platform
         import subprocess
 
         self._sp = subprocess
         self.root = root
+        # Windows Git Bash 下裸 python3 命中 WindowsApps 的 Store 别名（exit 49、无输出），
+        # 而 vendor delete 等路径的 python3→python 回退条件是 stdout 含 "python3"，
+        # 永远不触发。容器内 python3 是真二进制；此处把裸 python3 解析为 python，
+        # 让替身忠实模拟容器环境（不是 mock vendor 逻辑）。
+        self._alias_python3 = platform.system() == "Windows"
 
     async def exec(self, command: str, *, timeout: float | None = None, workdir: str | None = None) -> str:
+        if self._alias_python3:
+            import re
+            command = re.sub(r"\bpython3\b", "python", command)
         r = await asyncio.to_thread(
             self._sp.run, ["sh", "-c", command],
             capture_output=True, text=True, cwd=str(self.root),
@@ -329,6 +338,27 @@ async def test_read_file_offset_beyond_end_names_recovery(ws_root):
     out = await dispatch_tool("read_file", {"path": "small.txt", "offset": 99}, ctx)
     assert _err_of(out) is None
     assert "beyond the end" in out and "2 lines total" in out
+
+
+@pytest.mark.asyncio
+async def test_delete_file_removes_and_is_idempotent(ws_root):
+    # 删除真实生效；重复删（已不存在）幂等成功，模型无需先探测存在性
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await dispatch_tool("delete_file", {"path": "demo.py"}, ctx)
+    assert _err_of(out) is None
+    assert not (ws_root / "demo.py").exists()
+
+    out2 = await dispatch_tool("delete_file", {"path": "demo.py"}, ctx)
+    assert _err_of(out2) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_file_rejects_directory(ws_root):
+    # 目录拒绝删除（不提供递归删除，防止模型一条命令端掉整棵树）
+    ctx = ToolContext(executor=LocalShExecutor(ws_root), repo="demo", task_id="t1")
+    out = await dispatch_tool("delete_file", {"path": "."}, ctx)
+    assert _err_of(out) is not None
+    assert (ws_root / "demo.py").exists()  # 误伤为零
 
 
 @pytest.mark.asyncio

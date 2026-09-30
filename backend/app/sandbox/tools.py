@@ -228,6 +228,18 @@ _SCHEMAS: dict[str, dict] = {
         "description": "查看本分支相对基线的提交列表（git log）。",
         "parameters": {"type": "object", "properties": {}},
     },
+    "delete_file": {
+        "name": "delete_file",
+        "description": (
+            "删除仓库内的文件（不存在的文件静默成功）。目录会被拒绝，不提供递归删除。"
+            "用于清理误建的文件或废弃的产物；不要用 run_command 跑 rm 替代本工具。"
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["path"],
+            "properties": {"path": {"type": "string", "description": "相对工作区根的文件路径"}},
+        },
+    },
 }
 
 # 危险命令黑名单（fastclaw 同款：整体小写后子串匹配，只防毁灭性命令）
@@ -373,6 +385,15 @@ async def _h_git_log(args: dict, ctx: ToolContext) -> str:
     return _wrap(await ctx.executor.exec("git log --oneline HEAD --not @{u} || git log --oneline -20"))
 
 
+async def _h_delete_file(args: dict, ctx: ToolContext) -> str:
+    ops = _get_file_ops(ctx)
+    r = await asyncio.to_thread(ops.delete_path, args["path"])
+    if r.error:
+        return _err(r.error)
+    # vendor 幂等语义：文件不存在按成功处理，模型无需先探测存在性
+    return _wrap(f"ok: deleted {args['path']}")
+
+
 _HANDLERS = {
     "list_dir": _h_list_dir,
     "read_file": _h_read_file,
@@ -383,6 +404,7 @@ _HANDLERS = {
     "run_command": _h_run_command,
     "git_diff": _h_git_diff,
     "git_log": _h_git_log,
+    "delete_file": _h_delete_file,
 }
 
 
