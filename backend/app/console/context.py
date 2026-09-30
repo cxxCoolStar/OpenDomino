@@ -23,9 +23,13 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 from app.config import settings
 from app.memory.types import MemoryService, SessionContext
+
+if TYPE_CHECKING:
+    from app.memory.types import ChatMessage
 
 
 class ContextAssembler:

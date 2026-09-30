@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.config import settings
 from app.memory.service import SQLiteMemoryService
 from app.memory.types import ChatMessage, MemoryDraft, MemoryStatus, PendingState
 
@@ -84,11 +85,6 @@ async def test_get_memory(mem):
 
 
 # ---- 分级召回（路线 A）----
-
-import pytest
-
-from app.config import settings
-from app.memory.types import MemoryDraft
 
 
 @pytest.mark.asyncio
