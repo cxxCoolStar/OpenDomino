@@ -156,7 +156,7 @@ class SandboxAgent:
                 log.debug("on_event failed task=%s", task.id)
 
         messages: list[dict] = [
-            {"role": "system", "content": build_system_prompt(task)},
+            {"role": "system", "content": build_system_prompt(task, skill_catalog=_skill_catalog_text())},
             {"role": "user", "content": task.instruction},
         ]
         tools = build_tool_definitions()
@@ -310,6 +310,18 @@ def _is_failed_result(output: str) -> bool:
     except (json.JSONDecodeError, ValueError):
         return False
     return isinstance(data, dict) and "error" in data
+
+
+def _skill_catalog_text() -> str:
+    """SKILL 目录文本（ADR-005 渐进式披露）：无技能/目录缺失时返回空串，不注入空块。"""
+    from app.skills.catalog import build_catalog
+
+    try:
+        catalog, _ = build_catalog()
+    except Exception:  # noqa: BLE001 —— SKILL 层可缺省，目录构建失败不影响任务执行
+        log.exception("skill catalog build failed")
+        return ""
+    return catalog
 
 
 def _preview_args(args: dict, limit: int = 80) -> str:

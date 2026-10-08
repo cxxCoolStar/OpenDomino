@@ -240,6 +240,19 @@ _SCHEMAS: dict[str, dict] = {
             "properties": {"path": {"type": "string", "description": "相对工作区根的文件路径"}},
         },
     },
+    "load_skill": {
+        "name": "load_skill",
+        "description": (
+            "加载一个 SKILL 方法文档的全文（ADR-005）。系统提示里有可用技能目录，"
+            "当任务命中某技能的触发场景时调用本工具读取其执行步骤与验收标准；"
+            "调用前先看目录里的描述确认命中，未命中任何技能就不要调用。"
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {"name": {"type": "string", "description": "技能名（目录中的 name）"}},
+        },
+    },
 }
 
 # 危险命令黑名单（fastclaw 同款：整体小写后子串匹配，只防毁灭性命令）
@@ -394,6 +407,20 @@ async def _h_delete_file(args: dict, ctx: ToolContext) -> str:
     return _wrap(f"ok: deleted {args['path']}")
 
 
+async def _h_load_skill(args: dict, ctx: ToolContext) -> str:
+    """SKILL 方法加载（ADR-005）：读全文 + requires 预检。
+
+    与其他工具不同，这里读的是宿主侧 SKILL 目录（只读挂载语义），
+    不经容器 executor——SKILL 是方法文档，不是仓库内容。
+    """
+    from app.skills.loader import load_skill
+
+    return await load_skill(
+        str(args.get("name") or "").strip(),
+        available_tools=set(_HANDLERS) | {"load_skill"},
+    )
+
+
 _HANDLERS = {
     "list_dir": _h_list_dir,
     "read_file": _h_read_file,
@@ -405,6 +432,7 @@ _HANDLERS = {
     "git_diff": _h_git_diff,
     "git_log": _h_git_log,
     "delete_file": _h_delete_file,
+    "load_skill": _h_load_skill,
 }
 
 
