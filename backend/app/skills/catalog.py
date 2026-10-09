@@ -20,7 +20,9 @@ def build_catalog(skills: list[SkillMeta] | None = None) -> tuple[str, str]:
     if not skills:
         return "", ""
 
-    catalog_lines = [s.catalog_line() for s in skills]
+    # always:true 的核心技能排目录最前（同组内保持字母序），其余按原字母序
+    ordered = sorted(skills, key=lambda s: (not s.always, s.name))
+    catalog_lines = [s.catalog_line() for s in ordered]
     catalog = "<skill_catalog>\n" + "\n".join(catalog_lines) + "\n</skill_catalog>"
 
     always_blocks = []

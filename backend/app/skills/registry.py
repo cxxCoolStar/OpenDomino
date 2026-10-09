@@ -159,6 +159,7 @@ def scan_skills(skills_dir: str | Path | None = None) -> list[SkillMeta]:
     """
     root = Path(skills_dir) if skills_dir else Path(settings.skills_dir)
     if not root.is_dir():
+        log.info("skills dir not found: %s", root)
         return []
     skills: list[SkillMeta] = []
     for skill_md in sorted(root.glob("*/SKILL.md")):

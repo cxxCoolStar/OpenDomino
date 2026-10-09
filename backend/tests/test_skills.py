@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -110,6 +111,14 @@ def test_scan_skills_missing_dir(tmp_path: Path):
     assert scan_skills(tmp_path / "nope") == []
 
 
+def test_scan_skills_missing_dir_logs_info(tmp_path: Path, caplog):
+    """缺目录不抛异常（SKILL 层可缺省），但留一条 info 日志便于排查。"""
+    with caplog.at_level(logging.INFO, logger="app.skills.registry"):
+        assert scan_skills(tmp_path / "nope") == []
+    assert any("skills dir not found" in r.message and str(tmp_path / "nope") in r.message
+               for r in caplog.records)
+
+
 def test_scan_skills_skips_dirs_without_skill_md(tmp_path: Path):
     d = tmp_path / "skills"
     (d / "empty").mkdir(parents=True)
@@ -168,6 +177,32 @@ def test_build_catalog_progressive_disclosure(skills_dir: Path):
 def test_build_catalog_empty(tmp_path: Path):
     assert build_catalog([]) == ("", "")
     assert build_catalog(scan_skills(tmp_path / "nope")) == ("", "")
+
+
+def _catalog_names(catalog: str) -> list[str]:
+    return [line[2:].split(":")[0] for line in catalog.splitlines()[1:-1]]
+
+
+def test_build_catalog_always_first(skills_dir: Path):
+    catalog, _ = build_catalog(scan_skills(skills_dir))
+    names = _catalog_names(catalog)
+    # core-skill 是 always:true，其余非 always；always 组内字母序在前
+    assert names.index("core-skill") < names.index("minimal-skill")
+    assert names.index("core-skill") < names.index("test-skill")
+    assert names == sorted(names, key=lambda n: (n != "core-skill", n))
+
+
+def test_build_catalog_no_always_keeps_alphabetical(tmp_path: Path):
+    d = tmp_path / "skills"
+    for name in ["beta", "alpha", "gamma"]:
+        sub = d / name
+        sub.mkdir(parents=True)
+        (sub / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name} 技能。\n---\n\n正文\n",
+            encoding="utf-8",
+        )
+    catalog, _ = build_catalog(scan_skills(d))
+    assert _catalog_names(catalog) == ["alpha", "beta", "gamma"]
 
 
 # ---------- load_skill ----------
