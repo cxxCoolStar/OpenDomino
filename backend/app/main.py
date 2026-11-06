@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import logging.handlers
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 
@@ -17,6 +15,7 @@ from app.console.distiller import Distiller
 from app.console.llm import OpenAIClient
 from app.console.router import Router
 from app.console.task_ops import TaskOpHandler
+from app.log_setup import setup_file_logging
 from app.memory.service import SQLiteMemoryService
 from app.sandbox.agent import SandboxAgent
 from app.sandbox.container import ContainerPool
@@ -28,26 +27,12 @@ from app.sandbox.reporter import TaskReporter
 from app.sandbox.storage import TaskService
 
 logging.basicConfig(level=logging.INFO)
-# 任务失败往往只有日志能定位（如 #dccfa430 空响应事故），前台进程日志必须落盘：
-# 控制台照常输出，文件 5MB 轮转保 5 份（约 25MB 上限）
 log = logging.getLogger("opendomino")
-
-
-def _setup_file_logging() -> None:
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-    handler = logging.handlers.RotatingFileHandler(
-        log_dir / "opendomino.log", maxBytes=5 * 1024 * 1024,
-        backupCount=5, encoding="utf-8",
-    )
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s %(message)s"))
-    logging.getLogger().addHandler(handler)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _setup_file_logging()
+    setup_file_logging()
     if not settings.llm_api_key:
         raise RuntimeError("LLM_API_KEY is required")
     if not settings.feishu_app_id or not settings.feishu_app_secret:
