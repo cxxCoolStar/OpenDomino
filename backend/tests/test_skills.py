@@ -12,7 +12,7 @@ import pytest
 
 from app.skills.catalog import build_catalog
 from app.skills.loader import load_skill
-from app.skills.preflight import check_requires, _sync_check
+from app.skills.preflight import _sync_check, check_requires
 from app.skills.registry import SkillMeta, parse_frontmatter, scan_skills
 
 # ---------- 测试技能目录 ----------
@@ -227,7 +227,6 @@ async def test_load_skill_preflight_fail():
     async def no_probe(bin_name: str) -> bool:
         return False
 
-    skills = scan_skills((skills_dir_dir := None) or Path("skills")) if False else None
     # 直接构造 requires 缺 bins 的技能
     meta = SkillMeta(name="needs-node", requires_bins=["definitely-not-a-bin-xyz"],
                      path=Path("unused"))

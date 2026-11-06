@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import json
+
 from app.skills.preflight import check_requires
 from app.skills.registry import SkillMeta, parse_frontmatter, scan_skills
 
@@ -34,8 +36,6 @@ async def load_skill(
     错误都以 JSON error 信封返回（与 sandbox/tools.py 的 _err 形状一致），
     执行循环的失败护栏（连败摘工具）据此统一感知。
     """
-    import json
-
     all_skills = skills if skills is not None else scan_skills()
     meta = _find_skill(name, all_skills)
     if meta is None:

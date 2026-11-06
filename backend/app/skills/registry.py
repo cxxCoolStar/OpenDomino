@@ -77,7 +77,6 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
 
     meta: dict = {}
     current_block: dict | None = None
-    block_indent = 0   # 当前块的缩进深度（0=顶层 meta；2=metadata/requires；4=其嵌套子块）
     in_list: str | None = None  # 当前逐行列表归属的键
     for line in header_lines:
         if not line.strip() or line.strip().startswith("#"):
@@ -95,7 +94,6 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
                 # 嵌套块键（requires: / metadata:）：缩进比当前块深 → 在当前块里建子块并下探
                 current_block[key] = {}
                 current_block = current_block[key]
-                block_indent = indent
                 in_list = None
                 continue
             # 叶子值：标量（true/false）或列表，写入当前块
@@ -113,7 +111,6 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
             if not value:
                 # 顶层块键：metadata / requires
                 current_block = meta.setdefault(key, {})
-                block_indent = 0
             else:
                 if value in ("true", "false"):
                     meta[key] = value == "true"
